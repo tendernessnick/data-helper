@@ -99,6 +99,7 @@ const app = createApp({
 
   async mounted() {
     await this.refreshDatasets();
+    this.loadAiSettings();
     window.addEventListener("resize", this._onResize = () => {
       if (this._chart) this._chart.resize();
     });

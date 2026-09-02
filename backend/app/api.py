@@ -5,6 +5,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from . import analysis
+from . import ai
 from . import cleaning
 from . import exporter
 from . import profile as prof
@@ -209,5 +210,44 @@ def export_table(body: ExportTableBody):
         filename=path.name,
         media_type="application/octet-stream",
     )
+
+
+# ---------- AI（可选） ----------
+
+
+@router.get("/ai/settings")
+def get_ai_settings():
+    return ai.public_config()
+
+
+class AiSettingsBody(BaseModel):
+    api_key: str = ""
+    base_url: str = ""
+    model: str = ""
+
+
+@router.put("/ai/settings")
+def put_ai_settings(body: AiSettingsBody):
+    ai.save_config(body.model_dump())
+    return ai.public_config()
+
+
+class AiChatBody(BaseModel):
+    dataset_id: str
+    messages: list
+
+
+@router.post("/ai/chat")
+def ai_chat(body: AiChatBody):
+    _meta_or_404(body.dataset_id)
+    if not body.messages:
+        raise HTTPException(400, "消息为空")
+    df = _load(body.dataset_id)
+    context = ai.build_context(storage.get_meta(body.dataset_id), prof.profile_columns(df))
+    try:
+        reply = ai.chat(body.messages, context)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"reply": reply}
 
 
