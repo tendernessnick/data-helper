@@ -3,9 +3,11 @@ import pandas as pd
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 
+from . import cleaning
 from . import profile as prof
 from . import sample as sample_mod
 from . import storage
+from . import transform
 from .serialize import rows_payload
 from .storage import DatasetNotFound
 
@@ -98,3 +100,54 @@ def rows(ds_id: str, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1
 def get_profile(ds_id: str):
     df = _load(ds_id)
     return {"rows": len(df), "columns": prof.profile_columns(df)}
+
+
+# ---------- 清洗 ----------
+
+
+class CleanBody(BaseModel):
+    op: str
+    params: dict = {}
+
+
+@router.post("/datasets/{ds_id}/clean")
+def clean(ds_id: str, body: CleanBody):
+    df = _load(ds_id)
+    try:
+        out, message = cleaning.apply_op(df, body.op, body.params)
+    except cleaning.CleanError as e:
+        raise HTTPException(400, str(e))
+    meta = storage.save_df(ds_id, out, "清洗-" + body.op, message)
+    return {"message": message, "meta": meta}
+
+
+# ---------- Python 变换 ----------
+
+
+class TransformBody(BaseModel):
+    code: str
+    apply: bool = False
+
+
+@router.post("/datasets/{ds_id}/transform")
+def do_transform(ds_id: str, body: TransformBody):
+    df = _load(ds_id)
+    try:
+        result, stdout = transform.run_code(df, body.code)
+    except transform.TransformError as e:
+        raise HTTPException(400, str(e))
+    payload = {
+        "stdout": stdout,
+        "shape": {"rows": int(len(result)), "cols": int(result.shape[1])},
+        "old_shape": {"rows": int(len(df)), "cols": int(df.shape[1])},
+        "preview": rows_payload(result, 1, 20),
+    }
+    if body.apply:
+        first_line = body.code.strip().splitlines()[0][:80]
+        meta = storage.save_df(
+            ds_id, result, "Python变换",
+            f"{first_line}（{len(df)} 行 → {len(result)} 行）",
+        )
+        payload["meta"] = meta
+    return payload
+
