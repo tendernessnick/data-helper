@@ -6,4 +6,5 @@ data/
 exports/
 dist/
 build/
+*.spec
 *.egg-info/
