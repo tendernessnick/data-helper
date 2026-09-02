@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>数据分析小助手</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+<div id="app" v-cloak>
+
+  <!-- 顶栏 -->
+  <header class="topbar">
+    <div class="brand"><span class="logo">📊</span> 数据分析小助手</div>
+    <div class="top-actions">
+      <button class="btn primary" @click="$refs.file.click()" :disabled="busy">📥 导入数据</button>
+      <input type="file" ref="file" style="display:none" @change="uploadFile" accept=".csv,.xlsx,.json,.txt">
+      <button class="btn" @click="createSample" :disabled="busy">✨ 生成示例数据</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <!-- 侧栏：数据集列表 -->
+    <aside class="sidebar">
+      <div class="side-title">数据集（{{ datasets.length }}）</div>
+      <div class="ds-item" v-for="d in datasets" :key="d.id" :class="{active: d.id === currentId}" @click="selectDataset(d.id)">
+        <div class="ds-name" :title="d.name">{{ d.name }}</div>
+        <div class="ds-meta">{{ d.rows }} 行 × {{ d.cols }} 列 · {{ d.updated_at }}</div>
+      </div>
+      <div class="empty" v-if="!datasets.length">还没有数据集<br>点击右上角「导入数据」<br>或先生成示例数据</div>
+    </aside>
+
+    <!-- 主区域 -->
+    <main class="main" v-if="meta.id">
+      <div class="ds-header">
+        <div>
+          <h2>{{ meta.name }}</h2>
+          <div class="sub">{{ meta.rows }} 行 × {{ meta.cols }} 列 · 上传于 {{ meta.created_at }} · 源文件 {{ meta.original_filename }}</div>
+        </div>
+        <div class="ds-actions">
+          <button class="btn sm" @click="renameDs">重命名</button>
+          <button class="btn sm" @click="resetDs" :disabled="busy">↩ 回滚原始数据</button>
+          <button class="btn sm danger" @click="deleteDs">删除</button>
+          <span style="width:1px;background:var(--border)"></span>
+          <button class="btn sm primary" @click="exportDs('csv')">导出 CSV</button>
+          <button class="btn sm primary" @click="exportDs('xlsx')">导出 Excel</button>
+        </div>
+      </div>
+
+      <nav class="tabs">
+        <button v-for="t in tabs" :key="t.key" :class="{active: tab === t.key}" @click="switchTab(t.key)">{{ t.label }}</button>
+      </nav>
+
+      <!-- 预览 -->
+      <section v-if="tab === 'preview'">
+        <div class="table-scroll">
+          <table class="data">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th v-for="c in rowsData.columns" :key="c.name">{{ c.name }}<span class="dtype">{{ c.dtype }}</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(r, i) in rowsData.rows" :key="i">
+                <td class="null">{{ (page - 1) * pageSize + i + 1 }}</td>
+                <td v-for="(v, j) in r" :key="j" :class="{num: isNumCol(j), null: v === null}">{{ fmtCell(v) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="pager">
+          <button class="btn sm" :disabled="page <= 1 || busyRows" @click="page--; loadRows()">上一页</button>
+          <span>第 {{ page }} / {{ totalPages }} 页 · 共 {{ rowsData.total }} 行</span>
+          <button class="btn sm" :disabled="page >= totalPages || busyRows" @click="page++; loadRows()">下一页</button>
+          <span style="margin-left:12px">每页</span>
+          <select v-model.number="pageSize" @change="page = 1; loadRows()" style="width:70px">
+            <option>20</option><option>50</option><option>100</option><option>200</option>
+          </select>
+          <span>条</span>
+        </div>
+      </section>
+
+      <!-- 画像 -->
+      <section v-if="tab === 'profile'">
+        <div class="profile-grid">
+          <div class="pcard" v-for="c in profile.columns" :key="c.name">
+            <div class="pname">{{ c.name }} <span class="type-badge" :class="c.kind">{{ kindLabel(c.kind) }}</span></div>
+            <div class="missing-bar"><div :style="{width: c.missing_pct + '%'}"></div></div>
+            <div class="prow"><span>缺失</span><b :style="c.missing_pct > 20 ? 'color:var(--danger)' : ''">{{ c.missing }}（{{ c.missing_pct }}%）</b></div>
+            <div class="prow"><span>唯一值</span><b>{{ c.nunique }}</b></div>
+            <div class="prow"><span>类型</span><b>{{ c.dtype }}</b></div>
+            <template v-if="c.kind === 'numeric'">
+              <div class="prow"><span>最小 / 最大</span><b>{{ fmtCell(c.min) }} / {{ fmtCell(c.max) }}</b></div>
+              <div class="prow"><span>均值 / 中位数</span><b>{{ fmtCell(c.mean) }} / {{ fmtCell(c.median) }}</b></div>
+              <div class="prow"><span>标准差 / 四分位距</span><b>{{ fmtCell(c.std) }} / {{ fmtCell(c.p25) }}~{{ fmtCell(c.p75) }}</b></div>
+            </template>
+            <template v-if="c.kind === 'datetime'">
+              <div class="prow"><span>范围</span><b>{{ c.min }} ~ {{ c.max }}</b></div>
+            </template>
+            <div class="topv" v-if="c.top_values">
+              <div v-for="t in c.top_values" :key="t.value"><span>{{ t.value }}</span> —— {{ t.count }} 次</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 清洗 -->
+      <section v-if="tab === 'clean'">
+        <div class="card">
+          <div class="form-row">
+            <div class="field">
+              <label>选择清洗操作</label>
+              <select v-model="cleanOp" style="max-width:260px">
+                <option value="drop_duplicates">删除重复行</option>
+                <option value="drop_missing">删除含缺失值的行</option>
+                <option value="fill_missing">填充缺失值</option>
+                <option value="rename_columns">重命名列</option>
+                <option value="cast_type">转换列类型</option>
+                <option value="filter_rows">按条件筛选行</option>
+                <option value="drop_columns">删除列</option>
+              </select>
+            </div>
+          </div>
+
+          <div v-if="cleanOp === 'drop_duplicates'" class="hint">
+            保留首次出现的行，删除完全重复（或按所选列重复）的行。
+            <div class="form-row" style="margin-top:10px">
+              <div class="field">
+                <label>判定重复的列（留空 = 全部列）</label>
+                <select v-model="cleanSel.columns" multiple size="5">
+                  <option v-for="c in meta.columns" :key="c.name" :value="c.name">{{ c.name }}</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="cleanOp === 'drop_missing'" class="form-row">
+            <div class="field">
+              <label>检查的列（留空 = 全部列）</label>
+              <select v-model="cleanSel.columns" multiple size="5">
+                <option v-for="c in meta.columns" :key="c.name" :value="c.name">{{ c.name }}</option>
+              </select>
+            </div>
+            <div class="field" style="max-width:180px">
+              <label>判定方式</label>
+              <select v-model="cleanSel.how">
+                <option value="any">任一列为空即删</option>
+                <option value="all">所有列都空才删</option>
+              </select>
+            </div>
+          </div>
+
+          <div v-if="cleanOp === 'fill_missing'" class="form-row">
+            <div class="field">
+              <label>填充的列（留空 = 全部列）</label>
+              <select v-model="cleanSel.columns" multiple size="5">
+                <option v-for="c in meta.columns" :key="c.name" :value="c.name">{{ c.name }}</option>
+              </select>
+            </div>
+            <div class="field" style="max-width:180px">
+              <label>填充方式</label>
+              <select v-model="cleanSel.method">
+                <option value="constant">指定常数</option>
+                <option value="mean">均值（数值列）</option>
+                <option value="median">中位数（数值列）</option>
+                <option value="mode">众数</option>
+                <option value="ffill">用前一行的值</option>
+                <option value="bfill">用后一行的值</option>
+              </select>
+            </div>
+            <div class="field" v-if="cleanSel.method === 'constant'" style="max-width:180px">
+              <label>填充值</label>
+              <input type="text" v-model="cleanSel.value" placeholder="如 0 或 未知">
+            </div>
+          </div>
+
+          <div v-if="cleanOp === 'rename_columns'">
+            <div class="hint" style="margin-bottom:10px">直接修改需要改名的列（留空表示不改）：</div>
+            <div class="form-row">
+              <div class="field" v-for="c in meta.columns" :key="c.name">
+                <label>{{ c.name }}</label>
+                <input type="text" v-model="renameMap[c.name]" :placeholder="c.name">
+              </div>
+            </div>
+          </div>
+
+          <div v-if="cleanOp === 'cast_type'" class="form-row">
+            <div class="field">
+              <label>列</label>
+              <select v-model="cleanSel.column">
+                <option v-for="c in meta.columns" :key="c.name" :value="c.name">{{ c.name }}（{{ c.dtype }}）</option>
+              </select>
+            </div>
+            <div class="field" style="max-width:160px">
+              <label>目标类型</label>
+              <select v-model="cleanSel.to">
+                <option value="float">小数</option>
+                <option value="int">整数</option>
+                <option value="str">文本</option>
+                <option value="datetime">日期时间</option>
+              </select>
+            </div>
+            <div class="field" v-if="cleanSel.to === 'datetime'" style="max-width:220px">
+              <label>日期格式（可选，如 %Y-%m-%d）</label>
+              <input type="text" v-model="cleanSel.format" placeholder="留空自动识别">
+            </div>
+          </div>
+
+          <div v-if="cleanOp === 'filter_rows'" class="form-row">
+            <div class="field">
+              <label>列</label>
+              <select v-model="cleanSel.column">
+                <option v-for="c in meta.columns" :key="c.name" :value="c.name">{{ c.name }}</option>
+              </select>
+            </div>
+            <div class="field" style="max-width:190px">
+              <label>条件</label>
+              <select v-model="cleanSel.op">
+                <option value="eq">等于</option>
+                <option value="ne">不等于</option>
+                <option value="gt">大于</option>
+                <option value="ge">大于等于</option>
+                <option value="lt">小于</option>
+                <option value="le">小于等于</option>
+                <option value="contains">包含文本</option>
+                <option value="startswith">以文本开头</option>
+                <option value="between">介于两值之间</option>
+                <option value="isin">属于列表（逗号分隔）</option>
+                <option value="isnull">为空</option>
+                <option value="notnull">不为空</option>
+              </select>
+            </div>
+            <div class="field" v-if="!['isnull','notnull'].includes(cleanSel.op)" style="max-width:200px">
+              <label>值</label>
+              <input type="text" v-model="cleanSel.value" placeholder="数值或文本" v-if="cleanSel.op !== 'between'">
+              <div style="display:flex;gap:6px" v-if="cleanSel.op === 'between'">
+                <input type="text" v-model="cleanSel.value1" placeholder="最小" style="width:80px">
+                <input type="text" v-model="cleanSel.value2" placeholder="最大" style="width:80px">
+              </div>
+            </div>
+          </div>
+
+          <div v-if="cleanOp === 'drop_columns'">
+            <div class="check-grid">
+              <label v-for="c in meta.columns" :key="c.name">
+                <input type="checkbox" :value="c.name" v-model="cleanSel.dropCols"> {{ c.name }}
+              </label>
+            </div>
+          </div>
+
+          <div style="margin-top:14px">
+            <button class="btn primary" @click="runClean" :disabled="busy">执行清洗</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 分析 -->
+      <section v-if="tab === 'analyze'">
+        <div class="card">
+          <div class="form-row">
+            <div class="field" style="max-width:260px">
+              <label>分析类型</label>
+              <select v-model="anaKind">
+                <option value="groupby">分组聚合</option>
+                <option value="pivot">透视表</option>
+                <option value="trend">时间趋势</option>
+                <option value="corr">相关性分析</option>
+                <option value="histogram">分布直方图</option>
+                <option value="boxplot">箱线图</option>
+                <option value="value_counts">频次统计</option>
+                <option value="describe">汇总统计</option>
+              </select>
+            </div>
+          </div>
+
+          <div v-if="anaKind === 'groupby'">
+            <div class="field">
+              <label>分组列（可多选）</label>
+              <select v-model="ana.by" multiple size="4">
+                <option v-for="c in catCols" :key="c.name" :value="c.name">{{ c.name }}</option>
+              </select>
+            </div>
+            <label style="font-size:12px;color:var(--text-2);font-weight:600">聚合指标</label>
+            <div class="metric-row" v-for="(m, i) in ana.metrics" :key="i">
+              <select v-model="m.column">
+                <option v-for="c in meta.columns" :key="c.name" :value="c.name">{{ c.name }}</option>
+              </select>
+              <select v-model="m.agg" style="max-width:130px">
+                <option v-for="a in aggs" :key="a" :value="a">{{ aggLabel(a) }}</option>
+              </select>
+              <button class="btn sm danger" v-if="ana.metrics.length > 1" @click="ana.metrics.splice(i, 1)">✕</button>
+            </div>
+            <button class="btn sm" @click="ana.metrics.push({column: numCols[0] ? numCols[0].name : '', agg: 'sum'})">+ 添加指标</button>
+          </div>
+
+          <div v-if="anaKind === 'pivot'" class="form-row">
+            <div class="field">
+              <label>行维度</label>
+              <select v-model="ana.index"><option v-for="c in catCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
+            </div>
+            <div class="field">
+              <label>列维度（可选）</label>
+              <select v-model="ana.columns"><option value="">（不使用）</option><option v-for="c in catCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
+            </div>
+            <div class="field">
+              <label>数值列</label>
+              <select v-model="ana.values"><option v-for="c in numCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
+            </div>
+            <div class="field" style="max-width:130px">
+              <label>聚合方式</label>
+              <select v-model="ana.aggfunc"><option v-for="a in aggs" :key="a" :value="a">{{ aggLabel(a) }}</option></select>
+            </div>
+          </div>
+
+          <div v-if="anaKind === 'trend'" class="form-row">
+            <div class="field">
+              <label>日期列（文本日期会自动解析）</label>
+              <select v-model="ana.dateCol"><option v-for="c in meta.columns" :key="c.name" :value="c.name">{{ c.name }}</option></select>
+            </div>
+            <div class="field">
+              <label>数值列</label>
+              <select v-model="ana.valCol"><option v-for="c in numCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
+            </div>
+            <div class="field" style="max-width:130px">
+              <label>粒度</label>
+              <select v-model="ana.freq">
+                <option value="D">按天</option><option value="W">按周</option>
+                <option value="M">按月</option><option value="Q">按季</option><option value="Y">按年</option>
+              </select>
+            </div>
+            <div class="field" style="max-width:130px">
+              <label>聚合方式</label>
+              <select v-model="ana.trendAgg"><option v-for="a in aggs" :key="a" :value="a">{{ aggLabel(a) }}</option></select>
+            </div>
+          </div>
+
+          <div v-if="anaKind === 'corr'" class="field">
+            <label>数值列（留空 = 全部数值列）</label>
+            <select v-model="ana.corrCols" multiple size="5">
+              <option v-for="c in numCols" :key="c.name" :value="c.name">{{ c.name }}</option>
+            </select>
+          </div>
+
+          <div v-if="anaKind === 'histogram'" class="form-row">
+            <div class="field">
+              <label>数值列</label>
+              <select v-model="ana.histCol"><option v-for="c in numCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
+            </div>
+            <div class="field" style="max-width:170px">
+              <label>分桶数量：{{ ana.bins }}</label>
+              <input type="range" min="5" max="60" v-model.number="ana.bins" style="width:100%">
+            </div>
+          </div>
+
+          <div v-if="anaKind === 'boxplot'" class="field">
+            <label>数值列（可多选）</label>
+            <select v-model="ana.boxCols" multiple size="5">
+              <option v-for="c in numCols" :key="c.name" :value="c.name">{{ c.name }}</option>
+            </select>
+          </div>
+
+          <div v-if="anaKind === 'value_counts'" class="form-row">
+            <div class="field">
+              <label>列</label>
+              <select v-model="ana.vcCol"><option v-for="c in meta.columns" :key="c.name" :value="c.name">{{ c.name }}</option></select>
+            </div>
+            <div class="field" style="max-width:130px">
+              <label>Top N</label>
+              <input type="number" v-model.number="ana.top" min="1" max="100">
+            </div>
+          </div>
+
+          <div v-if="anaKind === 'describe'" class="hint">
+            对所有列输出 count / mean / std / min / 四分位数 / max 等汇总指标。
+          </div>
+
+          <div style="margin-top:14px">
+            <button class="btn primary" @click="runAnalyze" :disabled="busy || !anaReady">开始分析</button>
+          </div>
+        </div>
+
+        <template v-if="anaResult">
+          <div class="result-bar">
+            <div class="result-note" style="margin:0">{{ anaResult.note }}</div>
+            <div style="display:flex;gap:8px;align-items:center">
+              <select v-model="chartType" @change="renderChart" v-if="anaResult.rows && anaResult.rows.length" style="max-width:130px">
+                <option value="bar">柱状图</option>
+                <option value="line">折线图</option>
+                <option value="pie">饼图</option>
+              </select>
+              <button class="btn sm" @click="exportTable('csv')">导出结果 CSV</button>
+              <button class="btn sm" @click="exportTable('xlsx')">导出结果 Excel</button>
+            </div>
+          </div>
+
+          <div class="chart-box" ref="chart" v-if="anaResult.matrix || anaResult.box_stats || (anaResult.rows && anaResult.rows.length > 1 && numericResultCols.length)"></div>
+
+          <div class="table-scroll" style="margin-top:14px;max-height:420px" v-if="anaResult.rows && anaResult.rows.length">
+            <table class="data">
+              <thead>
+                <tr><th v-for="c in anaResult.columns" :key="c.name">{{ c.name }}</th></tr>
+              </thead>
+              <tbody>
+                <tr v-for="(r, i) in anaResult.rows.slice(0, 300)" :key="i">
+                  <td v-for="(v, j) in r" :key="j" :class="{num: anaResult.columns[j] && anaResult.columns[j].numeric, null: v === null}">{{ fmtCell(v) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="empty" v-if="anaResult.rows && anaResult.rows.length > 300">结果较多，仅显示前 300 行（导出可得完整数据）</div>
+        </template>
+      </section>
+
+      <!-- Python 变换 -->
+      <section v-if="tab === 'transform'">
+        <div class="card">
+          <div class="form-row" style="margin-bottom:10px">
+            <div class="field" style="max-width:300px">
+              <label>代码模板</label>
+              <select v-model="tfSample" @change="applySample">
+                <option value="">（选择模板插入）</option>
+                <option v-for="(s, i) in tfSamples" :key="i" :value="i">{{ s.name }}</option>
+              </select>
+            </div>
+          </div>
+          <textarea class="code" v-model="code" spellcheck="false"></textarea>
+          <div class="hint" style="margin:8px 0 12px">
+            代码中可直接使用 <code>df</code>（当前数据）、<code>pd</code>、<code>np</code>。执行结束后变量 <code>df</code> 即为新数据。
+            建议先「预览运行」确认无误再应用。执行上限 30 秒。
+          </div>
+          <div style="display:flex;gap:10px">
+            <button class="btn" @click="runTransform(false)" :disabled="busy">▶ 预览运行</button>
+            <button class="btn primary" @click="runTransform(true)" :disabled="busy">✔ 应用到数据集</button>
+          </div>
+        </div>
+        <div class="card" v-if="tfResult">
+          <h3>运行结果：{{ tfResult.old_shape.rows }} 行 × {{ tfResult.old_shape.cols }} 列 → {{ tfResult.shape.rows }} 行 × {{ tfResult.shape.cols }} 列</h3>
+          <div class="hint" v-if="tfResult.stdout" style="white-space:pre-wrap;background:#0f172a;color:#e2e8f0;padding:10px;border-radius:6px">{{ tfResult.stdout }}</div>
+          <div class="table-scroll" style="margin-top:10px;max-height:320px">
+            <table class="data">
+              <thead><tr><th v-for="c in tfResult.preview.columns" :key="c.name">{{ c.name }}<span class="dtype">{{ c.dtype }}</span></th></tr></thead>
+              <tbody>
+                <tr v-for="(r, i) in tfResult.preview.rows" :key="i">
+                  <td v-for="(v, j) in r" :key="j" :class="{null: v === null}">{{ fmtCell(v) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- AI 问答 -->
+      <section v-if="tab === 'ai'">
+        <div class="card">
+          <h3><span class="badge-dot" :class="{on: aiConfigured}"></span>大模型分析（可选）</h3>
+          <div class="hint" style="margin-bottom:12px">
+            未配置时所有功能纯本地运行。配置后可对当前数据集用自然语言提问，模型可返回分析结论或 pandas 代码建议（代码经你确认后才执行）。
+            兼容 OpenAI 风格接口，如智谱 <code>https://open.bigmodel.cn/api/paas/v4</code>。
+          </div>
+          <div class="form-row">
+            <div class="field">
+              <label>API Base URL</label>
+              <input type="text" v-model="aiSettings.base_url" placeholder="https://open.bigmodel.cn/api/paas/v4">
+            </div>
+            <div class="field">
+              <label>模型名称</label>
+              <input type="text" v-model="aiSettings.model" placeholder="glm-4.5-flash">
+            </div>
+            <div class="field">
+              <label>API Key（仅保存在本机）</label>
+              <input type="password" v-model="aiSettings.api_key" placeholder="sk-...">
+            </div>
+            <div class="field" style="max-width:120px">
+              <label>&nbsp;</label>
+              <button class="btn primary" @click="saveAiSettings" :disabled="busy">保存配置</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="chat-box">
+            <div class="chat-msgs" ref="chatMsgs">
+              <div class="empty" v-if="!aiMessages.length && aiConfigured">试试问：哪个地区销售额最高？各月销售额趋势如何？</div>
+              <div class="chat-msg" :class="m.role" v-for="(m, i) in aiMessages" :key="i">
+                <div class="who">{{ m.role === 'user' ? '我' : 'AI 助手' }}</div>
+                <div class="bubble">
+                  <template v-for="(seg, j) in parseMsg(m.content)" :key="j">
+                    <pre v-if="seg.code">{{ seg.text }}</pre>
+                    <template v-else>{{ seg.text }}</template>
+                  </template>
+                </div>
+                <button v-if="m.role === 'assistant' && msgHasCode(m)" class="btn sm" style="margin-top:6px" @click="useAiCode(m)">▶ 把这段代码放到「Python 变换」运行</button>
+              </div>
+            </div>
+            <div class="chat-input">
+              <textarea v-model="aiInput" @keydown.enter.exact.prevent="sendAi" placeholder="输入问题，Enter 发送（Shift+Enter 换行）"></textarea>
+              <button class="btn primary" @click="sendAi" :disabled="busy || !aiConfigured || !aiInput.trim()">发送</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 历史 -->
+      <section v-if="tab === 'history'">
+        <div class="card">
+          <h3>操作历史（{{ meta.history.length }} 条）</h3>
+          <ul class="timeline">
+            <li v-for="(h, i) in [...meta.history].reverse()" :key="i">
+              <div class="tl-time">{{ h.time }}</div>
+              <div class="tl-action">{{ h.action }}</div>
+              <div class="tl-detail" v-if="h.detail">{{ h.detail }}</div>
+            </li>
+          </ul>
+        </div>
+      </section>
+    </main>
+
+    <!-- 欢迎页 -->
+    <main class="main welcome" v-else>
+      <div class="welcome-inner">
+        <h1>📊 数据分析小助手</h1>
+        <p>本地运行 · 数据不出本机 · 导入 → 清洗 → 分析 → 可视化 → 导出</p>
+        <div class="feature-grid">
+          <div class="feature"><div class="fi">📥</div><b>多格式导入</b><span>CSV / Excel / JSON，自动识别中文编码与分隔符</span></div>
+          <div class="feature"><div class="fi">🔍</div><b>数据画像</b><span>每列类型、缺失率、统计量、高频值一目了然</span></div>
+          <div class="feature"><div class="fi">🧹</div><b>数据清洗</b><span>去重、缺失值处理、类型转换、条件筛选，可回滚</span></div>
+          <div class="feature"><div class="fi">📈</div><b>统计分析</b><span>分组聚合、透视表、趋势、相关性、直方图、箱线图</span></div>
+          <div class="feature"><div class="fi">🐍</div><b>Python 变换</b><span>直接写 pandas 代码处理数据，先预览后应用</span></div>
+          <div class="feature"><div class="fi">📤</div><b>一键导出</b><span>数据与分析结果导出为 CSV / Excel</span></div>
+        </div>
+        <div style="margin-top:28px">
+          <button class="btn primary" @click="$refs.file.click()">导入第一个数据集</button>
+          <button class="btn" @click="createSample" style="margin-left:10px">先生成示例数据体验</button>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Toast -->
+  <div class="toasts">
+    <div class="toast" :class="t.type" v-for="t in toasts" :key="t.id">{{ t.msg }}</div>
+  </div>
+</div>
+
+<script src="/vendor/echarts.min.js"></script>
+<script src="/vendor/vue.global.prod.js"></script>
+<script src="/js/app.js"></script>
+</body>
+</html>
