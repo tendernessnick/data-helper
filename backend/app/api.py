@@ -1,9 +1,12 @@
 """全部 HTTP API 路由（挂在 /api 前缀下）。"""
 import pandas as pd
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from . import analysis
 from . import cleaning
+from . import exporter
 from . import profile as prof
 from . import sample as sample_mod
 from . import storage
@@ -150,4 +153,61 @@ def do_transform(ds_id: str, body: TransformBody):
         )
         payload["meta"] = meta
     return payload
+
+
+# ---------- 分析 ----------
+
+
+class AnalyzeBody(BaseModel):
+    kind: str
+    params: dict = {}
+
+
+@router.post("/datasets/{ds_id}/analyze")
+def analyze(ds_id: str, body: AnalyzeBody):
+    df = _load(ds_id)
+    try:
+        return analysis.run(df, body.kind, body.params)
+    except analysis.AnalysisError as e:
+        raise HTTPException(400, str(e))
+
+
+# ---------- 导出 ----------
+
+
+@router.get("/datasets/{ds_id}/export")
+def export_dataset(ds_id: str, format: str = Query("csv"), filename: str = Query("")):
+    _meta_or_404(ds_id)
+    df = _load(ds_id)
+    name = filename or f"{storage.get_meta(ds_id)['name']}_导出"
+    try:
+        path = exporter.export_df(df, name, format)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return FileResponse(
+        path,
+        filename=path.name,
+        media_type="application/octet-stream",
+    )
+
+
+class ExportTableBody(BaseModel):
+    columns: list
+    rows: list
+    filename: str = "分析结果"
+    format: str = "csv"
+
+
+@router.post("/export-table")
+def export_table(body: ExportTableBody):
+    try:
+        path = exporter.export_table(body.columns, body.rows, body.filename, body.format)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return FileResponse(
+        path,
+        filename=path.name,
+        media_type="application/octet-stream",
+    )
+
 
