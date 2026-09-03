@@ -170,6 +170,97 @@ def boxplot(df: pd.DataFrame, params: dict) -> dict:
     return {"columns": [], "rows": [], "box_stats": stats, "note": "箱线图五数概括"}
 
 
+FREQ_MAP = {"D": "D", "W": "W", "M": "MS", "Q": "QS", "Y": "YS"}
+# 同比需要的周期数（上一个"同口径期间"距离当前多少个周期）
+YOY_PERIODS = {"D": 365, "W": 52, "M": 12, "Q": 4, "Y": None}
+FREQ_LABEL = {"D": "天", "W": "周", "M": "月", "Q": "季", "Y": "年"}
+
+
+def _resample_series(df: pd.DataFrame, date_col: str, value_col: str, freq: str, agg: str):
+    """按时间频率重采样为数值序列，返回 (期间标签列表, 数值Series)。"""
+    _check(df, date_col)
+    _check(df, value_col)
+    if agg not in AGGS:
+        raise AnalysisError(f"未知聚合方式 {agg}")
+    s = df[date_col]
+    if not pd.api.types.is_datetime64_any_dtype(s):
+        s = pd.to_datetime(s, errors="coerce")
+    if s.isna().all():
+        raise AnalysisError(f"列 [{date_col}] 无法解析为日期（可先在清洗中做类型转换）")
+    tmp = pd.DataFrame({"日期": s, "值": pd.to_numeric(df[value_col], errors="coerce")}).dropna(subset=["日期"])
+    if tmp.empty:
+        raise AnalysisError("没有同时具备日期与数值的行")
+    rule = FREQ_MAP.get(freq, "MS")
+    series = tmp.set_index("日期").resample(rule)["值"].agg(agg).dropna()
+    if series.empty:
+        raise AnalysisError("重采样后没有数据")
+    return series
+
+
+def growth(df: pd.DataFrame, params: dict) -> dict:
+    """同比/环比/累计分析。"""
+    date_col = params.get("date_column", "")
+    value_col = params.get("value_column", "")
+    freq = params.get("freq", "M")
+    agg = params.get("agg", "sum")
+    series = _resample_series(df, date_col, value_col, freq, agg)
+    freq_label = FREQ_LABEL.get(freq, freq)
+    mom = (series.pct_change() * 100).round(2)
+    yoy_periods = YOY_PERIODS.get(freq)
+    yoy = (series.pct_change(periods=yoy_periods) * 100).round(2) if yoy_periods else pd.Series([None] * len(series), index=series.index)
+    cum = series.cumsum().round(4)
+    rows_out = []
+    for idx, v in series.items():
+        rows_out.append(
+            [
+                idx.strftime("%Y-%m-%d"),
+                round(float(v), 4),
+                None if pd.isna(mom.get(idx)) else float(mom.get(idx)),
+                None if pd.isna(yoy.get(idx)) else float(yoy.get(idx)),
+                round(float(cum.get(idx)), 4),
+            ]
+        )
+    return {
+        "columns": [
+            {"name": "期间", "numeric": False},
+            {"name": value_col, "numeric": True},
+            {"name": "环比%", "numeric": True},
+            {"name": "同比%", "numeric": True},
+            {"name": "累计值", "numeric": True},
+        ],
+        "rows": rows_out,
+        "note": f"{value_col} 按{freq_label}{agg}：环比/同比增长率与累计值（同比按{freq_label}对齐）",
+        "chart": {"type": "line", "label_col": "期间"},
+    }
+
+
+def moving_avg(df: pd.DataFrame, params: dict) -> dict:
+    """移动平均（滚动均值）平滑趋势。"""
+    date_col = params.get("date_column", "")
+    value_col = params.get("value_column", "")
+    freq = params.get("freq", "M")
+    agg = params.get("agg", "sum")
+    window = int(params.get("window", 3))
+    if window < 2:
+        raise AnalysisError("窗口至少为 2")
+    series = _resample_series(df, date_col, value_col, freq, agg)
+    freq_label = FREQ_LABEL.get(freq, freq)
+    ma = series.rolling(window=window, min_periods=1).mean().round(4)
+    rows_out = []
+    for idx, v in series.items():
+        rows_out.append([idx.strftime("%Y-%m-%d"), round(float(v), 4), float(ma.get(idx))])
+    return {
+        "columns": [
+            {"name": "期间", "numeric": False},
+            {"name": value_col, "numeric": True},
+            {"name": f"{window}期移动平均", "numeric": True},
+        ],
+        "rows": rows_out,
+        "note": f"{value_col} 按{freq_label}{agg}的 {window} 期移动平均（平滑波动看趋势）",
+        "chart": {"type": "line", "label_col": "期间"},
+    }
+
+
 def value_counts(df: pd.DataFrame, params: dict) -> dict:
     column = params.get("column")
     top = int(params.get("top", 20))
@@ -185,32 +276,16 @@ def value_counts(df: pd.DataFrame, params: dict) -> dict:
 
 def trend(df: pd.DataFrame, params: dict) -> dict:
     """按时间列聚合数值列，得到趋势数据（折线图）。"""
-    date_col = params.get("date_column")
-    value_col = params.get("value_column")
+    date_col = params.get("date_column", "")
+    value_col = params.get("value_column", "")
     freq = params.get("freq", "M")  # D/W/M/Q/Y
     agg = params.get("agg", "sum")
-    _check(df, date_col)
-    _check(df, value_col)
-    if agg not in AGGS:
-        raise AnalysisError(f"未知聚合方式 {agg}")
-    s = df[date_col]
-    if not pd.api.types.is_datetime64_any_dtype(s):
-        s = pd.to_datetime(s, errors="coerce")
-    if s.isna().all():
-        raise AnalysisError(f"列 [{date_col}] 无法解析为日期（可先在清洗中做类型转换）")
-    tmp = pd.DataFrame({"日期": s, "值": pd.to_numeric(df[value_col], errors="coerce")}).dropna(
-        subset=["日期"]
-    )
-    freq_map = {"D": "D", "W": "W", "M": "MS", "Q": "QS", "Y": "YS"}
-    resampled = tmp.set_index("日期").resample(freq_map.get(freq, "MS"))["值"].agg(agg)
-    resampled = resampled.dropna()
-    rows_out = []
-    for idx, v in resampled.items():
-        rows_out.append([idx.strftime("%Y-%m-%d"), None if pd.isna(v) else round(float(v), 4)])
+    series = _resample_series(df, date_col, value_col, freq, agg)
+    freq_label = FREQ_LABEL.get(freq, freq)
     return {
         "columns": [{"name": "日期", "numeric": False}, {"name": value_col, "numeric": True}],
-        "rows": rows_out,
-        "note": f"{value_col} 按 {freq} {agg} 的趋势",
+        "rows": [[idx.strftime("%Y-%m-%d"), round(float(v), 4)] for idx, v in series.items()],
+        "note": f"{value_col} 按{freq_label} {agg} 的趋势",
         "chart": {"type": "line", "label_col": "日期"},
     }
 
@@ -224,6 +299,8 @@ KINDS = {
     "boxplot": boxplot,
     "value_counts": value_counts,
     "trend": trend,
+    "growth": growth,
+    "moving_avg": moving_avg,
 }
 
 
