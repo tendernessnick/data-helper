@@ -66,7 +66,11 @@ def read_csv_any(src) -> pd.DataFrame:
     raw = src if isinstance(src, (bytes, bytearray)) else Path(src).read_bytes()
     text = _decode_bytes(bytes(raw))
     try:
-        return pd.read_csv(io.StringIO(text), sep=None, engine="python")
+        df = pd.read_csv(io.StringIO(text), sep=None, engine="python")
+        # 嗅探在单列等场景会误判分隔符（整表变成 Unnamed 列），回退标准逗号解析
+        if df.shape[1] and all(str(c).startswith("Unnamed:") for c in df.columns):
+            return pd.read_csv(io.StringIO(text))
+        return df
     except pd.errors.ParserError:
         # 分隔符嗅探失败时按标准逗号解析
         return pd.read_csv(io.StringIO(text))

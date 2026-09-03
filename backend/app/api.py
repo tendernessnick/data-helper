@@ -8,7 +8,9 @@ from . import analysis
 from . import ai
 from . import cleaning
 from . import exporter
+from . import insights as insights_mod
 from . import profile as prof
+from . import report as report_mod
 from . import sample as sample_mod
 from . import storage
 from . import transform
@@ -219,6 +221,23 @@ def analyze(ds_id: str, body: AnalyzeBody):
         return analysis.run(df, body.kind, body.params)
     except analysis.AnalysisError as e:
         raise HTTPException(400, str(e))
+
+
+# ---------- 一键洞察 / 报告 ----------
+
+
+@router.get("/datasets/{ds_id}/insights")
+def get_insights(ds_id: str):
+    df = _load(ds_id)
+    return insights_mod.run_insights(df, storage.get_meta(ds_id))
+
+
+@router.post("/datasets/{ds_id}/report")
+def make_report(ds_id: str):
+    _meta_or_404(ds_id)
+    df = _load(ds_id)
+    path = report_mod.save_report(storage.get_meta(ds_id), df)
+    return FileResponse(path, filename=path.name, media_type="text/html")
 
 
 # ---------- 导出 ----------
