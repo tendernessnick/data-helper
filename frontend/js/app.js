@@ -101,6 +101,8 @@ const app = createApp({
       ],
 
       // AI
+      aiView: "chat",
+      dsSearch: "",
       aiSettings: { api_key: "", base_url: "", model: "" },
       aiConfigured: false,
       aiMessages: [],
@@ -114,6 +116,11 @@ const app = createApp({
   },
 
   computed: {
+    filteredDatasets() {
+      const q = (this.dsSearch || "").trim().toLowerCase();
+      if (!q) return this.datasets;
+      return this.datasets.filter((d) => (d.name || "").toLowerCase().includes(q));
+    },
     ringTrack() {
       return this.theme === "dark" ? "rgba(255,255,255,.08)" : "rgba(0,0,0,.06)";
     },
@@ -208,6 +215,24 @@ const app = createApp({
     isNumCol(j) {
       const c = this.rowsData.columns[j];
       return c && /^(int|uint|float|Int|Float)/.test(c.dtype);
+    },
+
+    timeAgo(ts) {
+      if (!ts) return "";
+      const d = new Date(ts.replace(" ", "T"));
+      const diff = (Date.now() - d.getTime()) / 1000;
+      if (isNaN(diff)) return ts;
+      if (diff < 60) return "刚刚";
+      if (diff < 3600) return Math.floor(diff / 60) + " 分钟前";
+      if (diff < 86400) return Math.floor(diff / 3600) + " 小时前";
+      if (diff < 7 * 86400) return Math.floor(diff / 86400) + " 天前";
+      return ts.slice(5, 10);
+    },
+
+    autoGrow(e) {
+      const el = e.target;
+      el.style.height = "auto";
+      el.style.height = Math.min(el.scrollHeight, 96) + "px";
     },
 
     aggLabel(a) {
@@ -1091,7 +1116,8 @@ const app = createApp({
       try {
         const s = await this.api("PUT", "/api/ai/settings", this.aiSettings);
         this.aiConfigured = !!(s.api_key && s.base_url && s.model);
-        this.toast(this.aiConfigured ? "AI 配置已保存，可以开始提问了" : "已保存（填全 Key / 地址 / 模型后启用）");
+        if (this.aiConfigured) this.aiView = "chat";
+        this.toast(this.aiConfigured ? "已连接，可以开始提问了" : "已保存（填全 Key / 地址 / 模型后启用）");
       } catch (e) { this.toast(e.message, "error"); }
     },
 

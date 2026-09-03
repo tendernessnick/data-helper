@@ -25,12 +25,26 @@
   <div class="layout-dock">
     <!-- 左：数据集栏 -->
     <aside class="rail">
-      <div class="side-title">数据集（{{ datasets.length }}）</div>
-      <div class="ds-item" v-for="d in datasets" :key="d.id" :class="{active: d.id === currentId}" @click="selectDataset(d.id)">
-        <div class="ds-name" :title="d.name">{{ d.name }}</div>
-        <div class="ds-meta">{{ d.rows }} 行 × {{ d.cols }} 列 · {{ d.updated_at }}</div>
+      <div class="rail-head">
+        <span class="side-title">数据集</span>
+        <span class="count-badge">{{ datasets.length }}</span>
       </div>
-      <div class="empty" v-if="!datasets.length">还没有数据集<br>导入文件 / 粘贴数据<br>或先生成示例数据</div>
+      <div class="rail-search" v-if="datasets.length">
+        <input type="text" v-model="dsSearch" placeholder="搜索数据集">
+      </div>
+      <div class="ds-list">
+        <div class="ds-item" v-for="d in filteredDatasets" :key="d.id" :class="{active: d.id === currentId}" @click="selectDataset(d.id)">
+          <div class="ds-main">
+            <div class="ds-name" :title="d.name">{{ d.name }}</div>
+            <div class="ds-meta">{{ d.rows }} 行 × {{ d.cols }} 列 · {{ timeAgo(d.updated_at) }}</div>
+          </div>
+        </div>
+        <div class="empty" v-if="datasets.length && !filteredDatasets.length">没有匹配的数据集</div>
+        <div class="empty" v-if="!datasets.length">还没有数据集<br>导入文件 / 粘贴数据<br>或先生成示例数据</div>
+      </div>
+      <div class="rail-foot">
+        <div class="hint" style="font-size:11px">数据仅保存在本机<br>程序目录 /data 文件夹</div>
+      </div>
     </aside>
 
     <!-- 中：画布 -->
@@ -889,8 +903,12 @@
           <span class="arrow" :class="{open: openSec.ai}">▶</span>
         </div>
         <div class="dock-sec-body" v-show="openSec.ai">
-          <template v-if="!aiConfigured">
-            <div class="dock-hint">可选功能：填好 Key 后可对当前数据集自然语言提问（兼容智谱/OpenAI 等接口），Key 仅存本机。</div>
+
+          <!-- 连接设置视图 -->
+          <template v-if="aiView === 'settings'">
+            <div class="dock-hint" style="margin-bottom:10px">
+              兼容 OpenAI 风格接口（智谱 GLM / DeepSeek / OpenAI 等）。<b>API Key 仅保存在本机</b>，请求直接从本机发出。
+            </div>
             <div class="field"><label>API Base URL</label>
               <input type="text" v-model="aiSettings.base_url" placeholder="https://open.bigmodel.cn/api/paas/v4">
             </div>
@@ -900,31 +918,57 @@
             <div class="field"><label>API Key</label>
               <input type="password" v-model="aiSettings.api_key" placeholder="sk-...">
             </div>
-            <button class="btn primary" style="width:100%" @click="saveAiSettings" :disabled="busy">保存配置</button>
+            <div style="display:flex;gap:8px;margin-top:4px">
+              <button class="btn primary" style="flex:1" @click="saveAiSettings" :disabled="busy">保存</button>
+              <button class="btn" v-if="aiConfigured" @click="aiView = 'chat'">返回对话</button>
+            </div>
+            <div class="dock-hint" style="margin-top:8px" v-if="aiConfigured">已连接：<b>{{ aiSettings.model }}</b></div>
           </template>
-          <template v-else>
-            <div class="chat-box" style="height:420px">
-              <div class="chat-msgs" ref="chatMsgs">
-                <div class="empty" v-if="!aiMessages.length" style="padding:14px 4px;font-size:12px">试试：哪个地区销售额最高？<br>各月趋势如何？有无异常？</div>
-                <div class="chat-msg" :class="m.role" v-for="(m, i) in aiMessages" :key="i">
-                  <div class="who">{{ m.role === 'user' ? '我' : 'AI' }}</div>
-                  <div class="bubble">
-                    <template v-for="(seg, j) in parseMsg(m.content)" :key="j">
-                      <pre v-if="seg.code">{{ seg.text }}</pre>
-                      <template v-else>{{ seg.text }}</template>
-                    </template>
-                  </div>
-                  <button v-if="m.role === 'assistant' && msgHasCode(m)" class="btn sm" style="margin-top:5px" @click="useAiCode(m)">▶ 放入 Python 变换</button>
+
+          <!-- 对话视图 -->
+          <template v-else-if="aiConfigured">
+            <div class="chat-status">
+              <span class="badge-dot on"></span>
+              <span class="chat-status-model" :title="aiSettings.base_url">{{ aiSettings.model }}</span>
+              <button class="chat-gear" title="AI 连接设置" @click="aiView = 'settings'">⚙️</button>
+            </div>
+            <div class="chat-msgs" ref="chatMsgs">
+              <div class="chat-welcome" v-if="!aiMessages.length">
+                <div class="chat-welcome-icon">🤖</div>
+                <b>向 AI 提问当前数据集</b>
+                <span>它会结合数据结构回答，还可以：</span>
+                <button @click="aiInput = '哪个类别的销售额最高？'">哪个类别销售额最高？</button>
+                <button @click="aiInput = '分析各月销售额趋势'">📊 各月销售额趋势（出图）</button>
+                <button @click="aiInput = '数据里有没有异常？'">数据里有没有异常？</button>
+              </div>
+              <div class="chat-msg" :class="m.role" v-for="(m, i) in aiMessages" :key="i">
+                <div class="who">{{ m.role === 'user' ? '我' : 'AI 助手' }}</div>
+                <div class="bubble">
+                  <template v-for="(seg, j) in parseMsg(m.content)" :key="j">
+                    <pre v-if="seg.code">{{ seg.text }}</pre>
+                    <template v-else>{{ seg.text }}</template>
+                  </template>
                 </div>
+                <button v-if="m.role === 'assistant' && msgHasCode(m)" class="btn sm" style="margin-top:5px" @click="useAiCode(m)">▶ 放入 Python 变换</button>
               </div>
-              <div class="chat-input">
-                <textarea v-model="aiInput" style="min-height:38px" @keydown.enter.exact.prevent="sendAi" placeholder="Enter 发送"></textarea>
-                <button class="btn primary" @click="sendAi" :disabled="busy || !aiInput.trim()">发送</button>
-              </div>
-              <div style="display:flex;gap:8px;margin-top:6px">
-                <button class="btn sm ghost" style="flex:1;color:var(--text-2)" @click="askAiInsight" :disabled="busy">💡 AI 解读洞察</button>
-                <button class="ai-chart-btn" style="flex:1" @click="askAiChart" :disabled="busy || !aiInput.trim()" title="在输入框描述想要的图表，如：各月销售额趋势">📊 按描述出图</button>
-              </div>
+            </div>
+            <div class="chat-input">
+              <textarea v-model="aiInput" rows="1" @input="autoGrow" @keydown.enter.exact.prevent="sendAi" placeholder="问点什么…（Enter 发送）"></textarea>
+              <button class="send-btn" :class="{ready: aiInput.trim()}" @click="sendAi" :disabled="busy || !aiInput.trim()" title="发送">↑</button>
+            </div>
+            <div class="chat-quick">
+              <button @click="askAiInsight" :disabled="busy">💡 解读洞察</button>
+              <button @click="askAiChart" :disabled="busy || !aiInput.trim()" title="把输入框内容转为图表">📊 描述出图</button>
+            </div>
+          </template>
+
+          <!-- 未配置 -->
+          <template v-else>
+            <div class="chat-welcome" style="margin-top:4px">
+              <div class="chat-welcome-icon">🤖</div>
+              <b>接入大模型，让分析更快</b>
+              <span>自然语言提问、一句话出图、AI 解读洞察。<br>兼容智谱 GLM / DeepSeek / OpenAI。</span>
+              <button @click="aiView = 'settings'">⚙️ 开始配置</button>
             </div>
           </template>
         </div>
