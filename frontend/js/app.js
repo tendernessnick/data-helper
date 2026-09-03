@@ -23,7 +23,7 @@ const app = createApp({
       cards: [],
 
       // 工具坞开合
-      openSec: { cl: false, ana: true, ts: false, biz: false, stat: false, sql: false, cmp: false, tf: false, ai: false, hist: false },
+      openSec: { cl: false, ana: true, ts: false, biz: false, stat: false, sql: false, cmp: false, feed: false, fin: false, tf: false, ai: false, hist: false },
 
       // 主题
       theme: "light",
@@ -84,6 +84,19 @@ const app = createApp({
 
       // 对比与采样
       cmpKind: "compare",
+
+      // 在线行情
+      feed: { source: "stock", symbol: "", start: "", end: "", period: "D", adjust: "qfq" },
+      feedIndexes: [],
+
+      // 金融分析
+      finKind: "metrics",
+      fin: { close: "", rf: 0.02, freq: "D" },
+      finDetected: {},
+      finTech: { indicator: "ma", n: 5 },
+      finBench: { otherId: "" },
+      finPortfolio: [{ id: "", w: null }, { id: "", w: null }],
+      finTest: { col: "", trend: false },
       cmp: { otherId: "", key: "", sampleMethod: "random", n: 30, by: "", name: "" },
 
       // Python 变换
@@ -315,8 +328,10 @@ const app = createApp({
       // 是否需要图表容器
       const R = card.payload;
       card.chartDiv = !!(R.matrix || R.box_stats || R.pareto || R.points || R.forecast_meta || R.heatmap || R.row_labels
+        || R.curve || R.scatter || R.frontier || (R.kline_safe)
         || (R.rows && R.rows.length > 1 && R.columns && R.columns.some((c) => c.numeric)));
       if (card.type === "test") card.chartDiv = false;
+      if (card.type === "kline") card.chartDiv = true;
       if (R.chart && R.chart.type && !R.matrix && !R.box_stats && !R.pareto) card.chartType = R.chart.type;
       this.cards.push(card);
       this.$nextTick(() => {
@@ -471,6 +486,100 @@ const app = createApp({
           return;
         }
 
+        // K线图（candlestick + MA + 成交量）
+        if (card.type === "kline" && R.dates) {
+          const up = "#34c759", down = "#ff3b30";
+          const mas = Object.entries(R.ma || {}).map(([name, data]) => ({
+            name, type: "line", data, showSymbol: false, smooth: false, lineStyle: { width: 1.2 },
+          }));
+          const volColors = R.kdata.map((k) => (k[1] >= k[0] ? up : down));
+          const option = {
+            animation: false,
+            tooltip: { trigger: "axis", axisPointer: { type: "cross" } },
+            legend: { bottom: 18, textStyle: { color: T.txt, fontSize: 11 } },
+            grid: [
+              { left: 60, right: 20, top: 20, height: "55%" },
+              { left: 60, right: 20, top: "76%", height: "14%" },
+            ],
+            xAxis: [
+              { type: "category", data: R.dates, gridIndex: 0, boundaryGap: true, axisLine: { lineStyle: { color: T.split } }, axisLabel: { color: T.txt, fontSize: 10 } },
+              { type: "category", data: R.dates, gridIndex: 1, boundaryGap: true, axisLabel: { show: false }, axisLine: { lineStyle: { color: T.split } } },
+            ],
+            yAxis: [
+              { scale: true, gridIndex: 0, axisLabel: { color: T.txt, fontSize: 10 }, splitLine: { lineStyle: { color: T.split } } },
+              { scale: true, gridIndex: 1, axisLabel: { show: false }, splitLine: { show: false } },
+            ],
+            dataZoom: [
+              { type: "inside", xAxisIndex: [0, 1], start: 40, end: 100 },
+              { type: "slider", xAxisIndex: [0, 1], bottom: 0, height: 14, start: 40, end: 100, textStyle: { color: T.txt, fontSize: 9 } },
+            ],
+            series: [
+              { name: "K线", type: "candlestick", data: R.kdata, xAxisIndex: 0, yAxisIndex: 0,
+                itemStyle: { color: up, color0: down, borderColor: up, borderColor0: down } },
+              ...mas.map((m, i) => ({ ...m, xAxisIndex: 0, yAxisIndex: 0, color: T.palette[(i + 1) % T.palette.length] })),
+              ...(R.volumes ? [{ name: "成交量", type: "bar", data: R.volumes, xAxisIndex: 1, yAxisIndex: 1,
+                  itemStyle: { color: (p2) => (p2.dataIndex >= 0 && volColors[p2.dataIndex] ? volColors[p2.dataIndex] : T.palette[0]) } }] : []),
+            ],
+          };
+          chart.setOption(option);
+          return;
+        }
+
+        // 金融指标卡的累计收益曲线
+        if (R.curve && R.groups) {
+          chart.setOption({
+            tooltip: { trigger: "axis", valueFormatter: (v) => v + "%" },
+            grid: { left: 60, right: 20, top: 20, bottom: 30 },
+            xAxis: { type: "category", data: R.curve.labels, axisLabel: { color: T.txt, fontSize: 10 } },
+            yAxis: { type: "value", axisLabel: { formatter: "{value}%", color: T.txt }, splitLine: { lineStyle: { color: T.split } } },
+            series: [{ name: "累计收益", type: "line", data: R.curve.values, smooth: true, showSymbol: false,
+                       color: T.palette[0], areaStyle: { opacity: 0.12 } }],
+          });
+          return;
+        }
+
+        // CAPM 散点 + 回归线
+        if (R.scatter && R.scatter.reg_y) {
+          const sc = R.scatter;
+          chart.setOption({
+            tooltip: { formatter: (p) => `${sc.xlabel}: ${p.value[0]}<br>${sc.ylabel}: ${p.value[1]}` },
+            grid: { left: 65, right: 20, top: 25, bottom: 45 },
+            xAxis: { type: "value", scale: true, name: sc.xlabel, nameTextStyle: { color: T.txt, fontSize: 10 }, axisLabel: { color: T.txt, fontSize: 10, formatter: (v) => (v * 100).toFixed(0) + "%" }, splitLine: { lineStyle: { color: T.split } } },
+            yAxis: { type: "value", scale: true, name: sc.ylabel, nameTextStyle: { color: T.txt, fontSize: 10 }, axisLabel: { color: T.txt, fontSize: 10, formatter: (v) => (v * 100).toFixed(0) + "%" }, splitLine: { lineStyle: { color: T.split } } },
+            series: [
+              { type: "scatter", data: sc.x.map((x, i) => [x, sc.y[i]]), symbolSize: 5,
+                itemStyle: { color: T.palette[0], opacity: 0.5 } },
+              { type: "line", data: sc.reg_x.map((x, i) => [x, sc.reg_y[i]]), symbol: "none",
+                lineStyle: { color: T.palette[3], width: 2, type: "dashed" }, tooltip: { show: false } },
+            ],
+          });
+          return;
+        }
+
+        // 组合有效前沿
+        if (R.frontier) {
+          const f = R.frontier;
+          chart.setOption({
+            tooltip: { trigger: "item", formatter: (p) => `波动 ${(p.value[0] * 100).toFixed(1)}%<br>收益 ${(p.value[1] * 100).toFixed(1)}%` },
+            grid: { left: 65, right: 20, top: 25, bottom: 45 },
+            xAxis: { type: "value", scale: true, name: "年化波动", nameTextStyle: { color: T.txt, fontSize: 10 },
+                     axisLabel: { color: T.txt, fontSize: 10, formatter: (v) => (v * 100).toFixed(0) + "%" }, splitLine: { lineStyle: { color: T.split } } },
+            yAxis: { type: "value", scale: true, name: "年化收益", nameTextStyle: { color: T.txt, fontSize: 10 },
+                     axisLabel: { color: T.txt, fontSize: 10, formatter: (v) => (v * 100).toFixed(0) + "%" }, splitLine: { lineStyle: { color: T.split } } },
+            series: [
+              { type: "scatter", data: f.vols.map((v, i) => [v, f.rets[i]]), symbolSize: 3,
+                itemStyle: { color: T.palette[0], opacity: 0.35 } },
+              { type: "scatter", data: [f.min_var], symbolSize: 12, name: "最小方差",
+                itemStyle: { color: T.palette[2] }, label: { show: true, formatter: "最小方差", position: "top", color: T.txt, fontSize: 10 } },
+              { type: "scatter", data: [f.max_sharpe], symbolSize: 12, name: "最大Sharpe",
+                itemStyle: { color: T.palette[3] }, label: { show: true, formatter: "最大Sharpe", position: "top", color: T.txt, fontSize: 10 } },
+              { type: "scatter", data: [f.current], symbolSize: 12, name: "当前组合",
+                itemStyle: { color: T.palette[4] }, label: { show: true, formatter: "当前组合", position: "bottom", color: T.txt, fontSize: 10 } },
+            ],
+          });
+          return;
+        }
+
         // 通用表格 → 柱/条/折/面积/饼/树图
         if (!R.rows || !R.rows.length) return;
         const cols = R.columns;
@@ -561,7 +670,7 @@ const app = createApp({
       this.cleanSel.columns = [];
       this.cleanSel.dropCols = [];
       this.cleanSel.outlierCols = [];
-      await Promise.all([this.loadRows(), this.loadProfile(), this.initDefaults(), this.loadSqlTables()]);
+      await Promise.all([this.loadRows(), this.loadProfile(), this.initDefaults(), this.loadSqlTables(), this.detectFinance(), this.loadFeedIndexes()]);
       this.meta = await this.api("GET", `/api/datasets/${id}`);
     },
 
@@ -938,6 +1047,81 @@ const app = createApp({
       }
       const iconMap = { trend: "📉", growth: "📉", groupby: "📈", value_counts: "🥧", histogram: "📊", boxplot: "📦", corr: "🔗" };
       await this.doAnalyze(s.kind, s.params, iconMap[s.kind] || "🎯");
+    },
+
+    // ---------- 金融分析 ----------
+    async loadFeedIndexes() {
+      try { this.feedIndexes = await this.api("GET", "/api/datafeed/indexes"); }
+      catch (e) { /* 静默 */ }
+    },
+
+    async detectFinance() {
+      try { this.finDetected = await this.api("GET", `/api/datasets/${this.currentId}/finance/detect`); }
+      catch (e) { this.finDetected = {}; }
+      if (this.finDetected.close) {
+        const p = this.profile.columns.find((c) => c.name === this.finDetected.close);
+        if (p && p.kind === "numeric" && !this.fin.close) this.fin.close = "";
+      }
+    },
+
+    async fetchFeed() {
+      if (!this.feed.symbol.trim()) { this.toast("请填写股票代码或选择指数", "error"); return; }
+      this.busy = true;
+      try {
+        const j = await this.api("POST", "/api/datafeed/fetch", this.feed);
+        this.toast(`已获取「${j.meta.name}」：${j.meta.rows} 行行情`);
+        await this.refreshDatasets();
+        await this.selectDataset(j.id);
+      } catch (e) { this.toast(e.message, "error"); }
+      finally { this.busy = false; }
+    },
+
+    async createStockSample() {
+      this.busy = true;
+      try {
+        const j = await this.api("POST", "/api/finance/sample-stock");
+        this.toast(`已生成示例股票数据：${j.meta.rows} 个交易日（可离线体验全部金融功能）`);
+        await this.refreshDatasets();
+        await this.selectDataset(j.id);
+      } catch (e) { this.toast(e.message, "error"); }
+      finally { this.busy = false; }
+    },
+
+    async runFin(kind) {
+      const titles = { metrics: "收益与风险指标", kline: "K线图", benchmark: "基准对比 (CAPM)", portfolio: "投资组合" };
+      this.busy = true;
+      try {
+        let R;
+        if (kind === "metrics") {
+          R = await this.api("POST", `/api/datasets/${this.currentId}/finance/metrics`, { close: this.fin.close, rf: this.fin.rf, freq: this.fin.freq });
+          this.addCard({ type: "fin_metrics", icon: "📈", title: titles[kind], payload: R, span2: true });
+        } else if (kind === "kline") {
+          R = await this.api("POST", `/api/datasets/${this.currentId}/finance/kline`, {});
+          this.addCard({ type: "kline", icon: "🕯️", title: "K线图", payload: R, span2: true });
+        } else if (kind === "tech") {
+          const r = await this.api("POST", `/api/datasets/${this.currentId}/finance/tech-indicator`, {
+            indicator: this.finTech.indicator, n: this.finTech.n,
+          });
+          this.toast(r.message);
+          await this.afterDataChange(r.meta);
+          return;
+        } else if (kind === "benchmark") {
+          R = await this.api("POST", `/api/datasets/${this.currentId}/finance/benchmark`, { other_id: this.finBench.otherId });
+          this.addCard({ type: "capm", icon: "⚖️", title: titles[kind], payload: R, span2: true });
+        } else if (kind === "portfolio") {
+          const assets = this.finPortfolio.filter((a) => a.id).map((a) => ({ id: a.id }));
+          const weights = this.finPortfolio.filter((a) => a.id).map((a) => a.w).filter((w) => w !== null && w !== undefined && w !== "");
+          R = await this.api("POST", "/api/finance/portfolio", {
+            assets, weights: weights.length === assets.length ? weights : [], rf: this.fin.rf,
+          });
+          this.addCard({ type: "portfolio", icon: "🧺", title: titles[kind], payload: R, span2: true });
+        } else if (kind === "adf" || kind === "lb") {
+          const params = kind === "adf" ? { column: this.finTest.col, trend: this.finTest.trend } : { column: this.finTest.col };
+          R = await this.api("POST", `/api/datasets/${this.currentId}/finance/test`, { test: kind, params });
+          this.addCard({ type: "test", icon: "🔬", title: kind === "adf" ? `ADF 检验「${R.column}」` : `Ljung-Box 检验「${R.column}」`, payload: R });
+        }
+      } catch (e) { this.toast(e.message, "error"); }
+      finally { this.busy = false; }
     },
 
     // ---------- 统计检验 ----------

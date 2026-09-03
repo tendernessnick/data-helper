@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>数据分析小助手</title>
-<link rel="stylesheet" href="/css/style.css?v=314">
+<link rel="stylesheet" href="/css/style.css?v=320">
 </head>
 <body>
 <div id="app" v-cloak>
@@ -285,6 +285,37 @@
                     </tbody>
                   </table>
                 </div>
+              </template>
+            </template>
+
+            <!-- 金融指标卡（收益风险 / CAPM / 组合） -->
+            <template v-else-if="card.type === 'fin_metrics' || card.type === 'capm' || card.type === 'portfolio'">
+              <div class="result-note" style="margin-bottom:9px">{{ card.payload.note }}</div>
+              <div class="chart-box" style="height:280px" v-if="card.chartDiv" :ref="el => setCardEl(card, el)"></div>
+              <div class="fin-group" v-for="(g, gi) in card.payload.groups" :key="gi">
+                <div class="ins-sec-title">{{ g.name }}</div>
+                <div class="fin-kv-grid">
+                  <div class="fin-kv" v-for="(it, ii) in g.items" :key="ii">
+                    <span>{{ it.label }}</span><b>{{ it.value }}</b>
+                  </div>
+                </div>
+              </div>
+              <template v-if="card.payload.corr_matrix">
+                <div class="detail-toggle" @click="card.showDetail = !card.showDetail">{{ card.showDetail ? '▼ 收起收益相关矩阵' : '▶ 查看收益相关矩阵' }}</div>
+                <div class="table-scroll" v-show="card.showDetail" style="max-height:200px">
+                  <table class="data">
+                    <thead><tr><th></th><th v-for="c in card.payload.corr_matrix.columns" :key="c">{{ c }}</th></tr></thead>
+                    <tbody>
+                      <tr v-for="(row, i) in card.payload.corr_matrix.values" :key="i">
+                        <td><b>{{ card.payload.corr_matrix.columns[i] }}</b></td>
+                        <td v-for="(v, j) in row" :key="j" class="num">{{ v }}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </template>
+              <template v-if="card.payload.assets">
+                <div class="hint" style="margin-top:6px">权重：{{ card.payload.assets.map((a, i) => a + ' ' + (card.payload.weights[i] * 100).toFixed(0) + '%').join(' · ') }}</div>
               </template>
             </template>
 
@@ -819,6 +850,160 @@
         </div>
       </div>
 
+      <!-- 在线行情 -->
+      <div class="dock-sec">
+        <div class="dock-sec-head" @click="openSec.feed = !openSec.feed">
+          <b>📡 在线行情</b><span class="arrow" :class="{open: openSec.feed}">▶</span>
+        </div>
+        <div class="dock-sec-body" v-show="openSec.feed">
+          <div class="dock-hint">akshare 开源数据库（东方财富主源，失败自动切新浪）。需联网；老师的 CSV/XLSX 请用顶部「导入文件」。</div>
+          <div class="form-row">
+            <div class="field"><label>类型</label>
+              <select v-model="feed.source">
+                <option value="stock">A 股个股</option>
+                <option value="index">A 股指数</option>
+              </select>
+            </div>
+            <div class="field"><label>复权（仅个股）</label>
+              <select v-model="feed.adjust" :disabled="feed.source !== 'stock'">
+                <option value="qfq">前复权</option>
+                <option value="hfq">后复权</option>
+                <option value="none">不复权</option>
+              </select>
+            </div>
+          </div>
+          <div class="field" v-if="feed.source === 'index'"><label>常用指数</label>
+            <select v-model="feed.symbol">
+              <option v-for="ix in feedIndexes" :key="ix.symbol" :value="ix.symbol">{{ ix.name }}</option>
+            </select>
+          </div>
+          <div class="field" v-else><label>股票代码</label>
+            <input type="text" v-model="feed.symbol" placeholder="如 600519 / 000001 / 300750">
+          </div>
+          <div class="form-row">
+            <div class="field"><label>开始日期</label>
+              <input type="text" v-model="feed.start" placeholder="2024-01-01">
+            </div>
+            <div class="field"><label>结束日期</label>
+              <input type="text" v-model="feed.end" placeholder="2025-12-31">
+            </div>
+            <div class="field"><label>周期</label>
+              <select v-model="feed.period">
+                <option value="D">日线</option><option value="W">周线</option><option value="M">月线</option>
+              </select>
+            </div>
+          </div>
+          <button class="btn primary" style="width:100%" @click="fetchFeed" :disabled="busy">📥 拉取行情</button>
+          <button class="btn" style="width:100%;margin-top:6px" @click="createStockSample" :disabled="busy">✨ 生成示例股票数据（离线）</button>
+        </div>
+      </div>
+
+      <!-- 金融分析 -->
+      <div class="dock-sec">
+        <div class="dock-sec-head" @click="openSec.fin = !openSec.fin">
+          <b>💰 金融分析</b><span class="arrow" :class="{open: openSec.fin}">▶</span>
+        </div>
+        <div class="dock-sec-body" v-show="openSec.fin">
+          <div class="dock-hint" v-if="!finDetected.close">未识别到行情列（需含 日期+收盘，或中英文 开盘/最高/最低/成交量）。可先重命名列。</div>
+          <div class="field"><label>分析功能</label>
+            <select v-model="finKind">
+              <option value="metrics">📈 收益与风险指标</option>
+              <option value="kline">🕯️ K线图（MA+成交量）</option>
+              <option value="tech">🔧 生成技术指标列</option>
+              <option value="benchmark">⚖️ 基准对比 / CAPM</option>
+              <option value="portfolio">🧺 投资组合（有效前沿）</option>
+              <option value="adf">🔬 ADF 平稳性检验</option>
+              <option value="lb">🔬 Ljung-Box 自相关检验</option>
+            </select>
+          </div>
+
+          <template v-if="finKind === 'metrics'">
+            <div class="field"><label>收盘列</label>
+              <select v-model="fin.close"><option value="">（自动识别）</option><option v-for="c in numCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
+            </div>
+            <div class="form-row">
+              <div class="field"><label>无风险利率(年)</label><input type="number" v-model.number="fin.rf" step="0.005" min="0"></div>
+              <div class="field"><label>数据频率</label>
+                <select v-model="fin.freq"><option value="D">日频</option><option value="W">周频</option><option value="M">月频</option></select>
+              </div>
+            </div>
+            <button class="btn primary" style="width:100%" @click="runFin('metrics')" :disabled="busy">计算指标</button>
+          </template>
+
+          <template v-if="finKind === 'kline'">
+            <div class="dock-hint">自动识别 开盘/最高/最低/收盘/成交量 列，输出 K 线 + MA5/10/20/60 + 成交量。</div>
+            <button class="btn primary" style="width:100%" @click="runFin('kline')" :disabled="busy">绘制 K 线</button>
+          </template>
+
+          <template v-if="finKind === 'tech'">
+            <div class="form-row">
+              <div class="field"><label>指标</label>
+                <select v-model="finTech.indicator">
+                  <option value="ma">MA 移动平均</option><option value="ema">EMA 指数平均</option>
+                  <option value="macd">MACD (12,26,9)</option><option value="rsi">RSI</option>
+                  <option value="boll">BOLL 布林带</option><option value="kdj">KDJ</option>
+                  <option value="atr">ATR 真实波幅</option><option value="obv">OBV 能量潮</option>
+                </select>
+              </div>
+              <div class="field" v-if="['ma','ema','rsi','atr'].includes(finTech.indicator)"><label>周期 N</label>
+                <input type="number" v-model.number="finTech.n" min="2" max="250">
+              </div>
+            </div>
+            <button class="btn primary" style="width:100%" @click="runFin('tech')" :disabled="busy">生成新列（可撤销）</button>
+          </template>
+
+          <template v-if="finKind === 'benchmark'">
+            <div class="dock-hint">CAPM：R资产 = α + β·R基准。基准选另一个数据集（如指数或另一只股票）。</div>
+            <div class="field"><label>基准数据集</label>
+              <select v-model="finBench.otherId">
+                <option v-for="d in datasets.filter(x => x.id !== currentId)" :key="d.id" :value="d.id">{{ d.name }}</option>
+              </select>
+            </div>
+            <button class="btn primary" style="width:100%" @click="runFin('benchmark')" :disabled="busy || !finBench.otherId">运行对比</button>
+          </template>
+
+          <template v-if="finKind === 'portfolio'">
+            <div class="dock-hint">选 2~5 个资产（数据集），各取收盘列按日期对齐。权重留空为等权。</div>
+            <div class="field" v-for="(a, i) in finPortfolio" :key="i">
+              <label>资产 {{ i + 1 }}</label>
+              <div style="display:flex;gap:6px">
+                <select v-model="a.id" style="flex:1">
+                  <option value="">（选择数据集）</option>
+                  <option v-for="d in datasets" :key="d.id" :value="d.id">{{ d.name.slice(0, 14) }}</option>
+                </select>
+                <input type="number" v-model.number="a.w" placeholder="权重" style="width:64px" min="0" step="0.1">
+              </div>
+            </div>
+            <div style="display:flex;gap:8px;margin:4px 0 8px">
+              <button class="btn sm" v-if="finPortfolio.length < 5" @click="finPortfolio.push({id: '', w: null})">+ 添加资产</button>
+              <button class="btn sm danger" v-if="finPortfolio.length > 2" @click="finPortfolio.pop()">− 移除</button>
+            </div>
+            <button class="btn primary" style="width:100%" @click="runFin('portfolio')"
+                    :disabled="busy || finPortfolio.filter(a => a.id).length < 2">计算组合</button>
+          </template>
+
+          <template v-if="finKind === 'adf'">
+            <div class="form-row">
+              <div class="field"><label>数值列</label>
+                <select v-model="finTest.col"><option v-for="c in numCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
+              </div>
+              <div class="field"><label>含趋势项</label>
+                <select v-model="finTest.trend"><option :value="false">仅常数</option><option :value="true">常数+趋势</option></select>
+              </div>
+            </div>
+            <button class="btn primary" style="width:100%" @click="runFin('adf')" :disabled="busy || !finTest.col">运行 ADF</button>
+          </template>
+
+          <template v-if="finKind === 'lb'">
+            <div class="field"><label>数值列</label>
+              <select v-model="finTest.col"><option v-for="c in numCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
+            </div>
+            <div class="dock-hint">默认检验滞后 1/5/10/20 阶（H0：无自相关）。</div>
+            <button class="btn primary" style="width:100%" @click="runFin('lb')" :disabled="busy || !finTest.col">运行 LB 检验</button>
+          </template>
+        </div>
+      </div>
+
       <!-- 对比与采样 -->
       <div class="dock-sec">
         <div class="dock-sec-head" @click="openSec.cmp = !openSec.cmp">
@@ -1043,8 +1228,8 @@
   </div>
 </div>
 
-<script src="/vendor/echarts.min.js?v=314"></script>
-<script src="/vendor/vue.global.prod.js?v=314"></script>
-<script src="/js/app.js?v=314"></script>
+<script src="/vendor/echarts.min.js?v=320"></script>
+<script src="/vendor/vue.global.prod.js?v=320"></script>
+<script src="/js/app.js?v=320"></script>
 </body>
 </html>

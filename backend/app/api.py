@@ -647,6 +647,14 @@ def datafeed_fetch(body: FeedBody):
     return {"id": ds_id, "meta": storage.get_meta(ds_id)}
 
 
+@router.post("/finance/sample-stock")
+def finance_sample_stock():
+    df = finance.make_stock_sample()
+    ds_id = storage.create_dataset("示例股票-日线(250日)", df, "示例股票.csv",
+                                   df.to_csv(index=False).encode("utf-8-sig"))
+    return {"id": ds_id, "meta": storage.get_meta(ds_id)}
+
+
 @router.get("/datafeed/indexes")
 def datafeed_indexes():
     return datafeed.INDEX_SOURCES

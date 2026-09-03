@@ -618,3 +618,14 @@ html[data-theme="dark"] .chat-msg.user .bubble { color: #fff; }
 }
 .chat-quick button:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
 .chat-quick button:disabled { opacity: .5; cursor: not-allowed; }
+
+/* 金融指标卡 */
+.fin-group { margin-bottom: 6px; }
+.fin-kv-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(215px, 1fr)); gap: 6px; }
+.fin-kv {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px;
+  padding: 7px 11px; font-size: 12px;
+}
+.fin-kv span { color: var(--text-2); }
+.fin-kv b { font-weight: 650; font-variant-numeric: tabular-nums; text-align: right; }

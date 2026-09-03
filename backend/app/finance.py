@@ -615,3 +615,25 @@ def ljung_box_test(df: pd.DataFrame, params: dict) -> dict:
         "columns": [], "rows": [],
     }
 
+
+
+def make_stock_sample(n: int = 250, seed: int = 7) -> pd.DataFrame:
+    """生成示例股票日线（几何布朗运动+阶段性趋势），离线体验金融功能。"""
+    rng = np.random.default_rng(seed)
+    # 三段趋势：上涨→回撤→震荡上行
+    drift = np.concatenate([
+        np.full(n // 3, 0.0015), np.full(n // 3, -0.0012), np.full(n - 2 * (n // 3), 0.0009),
+    ])[:n]
+    rets = drift + rng.normal(0, 0.018, n)
+    close = 20.0 * np.exp(np.cumsum(rets))
+    open_ = close * np.exp(rng.normal(0, 0.005, n))
+    high = np.maximum(open_, close) * (1 + np.abs(rng.normal(0, 0.007, n)))
+    low = np.minimum(open_, close) * (1 - np.abs(rng.normal(0, 0.007, n)))
+    vol = rng.integers(800_000, 6_000_000, n) * (1 + np.abs(rets) * 20)
+    return pd.DataFrame({
+        "日期": pd.bdate_range("2024-01-02", periods=n).strftime("%Y-%m-%d"),
+        "开盘": open_.round(3), "最高": high.round(3), "最低": low.round(3),
+        "收盘": close.round(3),
+        "成交量": (vol // 100).astype("int64") * 100,
+        "成交额": (vol * close).round(0),
+    })
