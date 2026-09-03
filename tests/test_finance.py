@@ -202,3 +202,73 @@ def test_ljung_box_white_noise_mostly_insignificant():
     r = finance.ljung_box_test(pd.DataFrame({"x": x}), {"column": "x", "lags": [1, 2, 3, 4, 5]})
     sig = sum(1 for t in r["tests"] if t["significant"])
     assert sig <= 2
+
+
+# ---------- API 端点 ----------
+
+
+def test_finance_endpoints_flow():
+    ds = upload_df(make_stock_df(120), "stock_api.csv")
+    # 识别
+    r0 = client.get(f"/api/datasets/{ds}/finance/detect")
+    assert r0.status_code == 200 and r0.json().get("close") == "收盘"
+    # 指标
+    r1 = client.post(f"/api/datasets/{ds}/finance/metrics", json={})
+    assert r1.status_code == 200 and "groups" in r1.json()
+    # K线
+    r2 = client.post(f"/api/datasets/{ds}/finance/kline", json={})
+    assert r2.status_code == 200 and r2.json()["kind"] == "kline"
+    # 技术指标（写回数据集）
+    r3 = client.post(f"/api/datasets/{ds}/finance/tech-indicator", json={"indicator": "ma", "n": 5})
+    assert r3.status_code == 200
+    assert "收盘_MA5" in [c["name"] for c in client.get(f"/api/datasets/{ds}").json()["columns"]]
+    # 金融检验
+    r4 = client.post(f"/api/datasets/{ds}/finance/test", json={"test": "adf", "params": {"column": "收盘"}})
+    assert r4.status_code == 200
+    r5 = client.post(f"/api/datasets/{ds}/finance/test", json={"test": "ljung_box", "params": {"column": "收盘", "lags": [1, 5]}})
+    assert r5.status_code == 200 and len(r5.json()["tests"]) == 2
+
+
+def test_finance_benchmark_and_portfolio_api():
+    ds1 = upload_df(make_stock_df(150, seed=1), "a.csv")
+    ds2 = upload_df(make_stock_df(150, seed=2), "b.csv")
+    rb = client.post(f"/api/datasets/{ds1}/finance/benchmark", json={"other_id": ds2})
+    assert rb.status_code == 200
+    body = rb.json()
+    assert "beta" in body and body["beta"] is not None
+    rp = client.post("/api/finance/portfolio", json={"assets": [{"id": ds1}, {"id": ds2}], "rf": 0.02})
+    assert rp.status_code == 200
+    pbody = rp.json()
+    assert len(pbody["frontier"]["vols"]) == 2000
+    assert pbody["groups"][0]["items"][0]["value"].endswith("%")
+
+
+def test_datafeed_mock_and_errors():
+    from unittest import mock
+    from backend.app import datafeed as df_mod
+
+    # 未安装 akshare 模拟：让 _import_ak 抛 ImportError
+    r1 = client.post("/api/datafeed/fetch", json={"source": "stock", "symbol": "600519", "start": "2024-01-01", "end": "2024-06-30"})
+    # akshare 可能已安装或未安装：两种路径都应 200（成功）或 400（友好错误），绝不能 500
+    assert r1.status_code in (200, 400)
+    if r1.status_code == 400:
+        assert "akshare" in r1.json()["detail"] or "失败" in r1.json()["detail"]
+
+    # 已安装时 mock 正常返回
+    fake = pd.DataFrame({
+        "日期": ["2024-01-02", "2024-01-03"], "开盘": [10.0, 10.5], "收盘": [10.5, 11.0],
+        "最高": [10.8, 11.2], "最低": [9.9, 10.4], "成交量": [100000, 120000], "成交额": [1e6, 1.3e6],
+        "换手率": [0.5, 0.6],  # 干扰列应被剔除
+    })
+    with mock.patch.object(df_mod, "_import_ak") as ak_mock:
+        ak_mock.return_value.stock_zh_a_hist.return_value = fake
+        r2 = client.post("/api/datafeed/fetch", json={"source": "stock", "symbol": "600519", "start": "2024-01-01", "end": "2024-01-31"})
+    assert r2.status_code == 200, r2.text
+    meta = r2.json()["meta"]
+    assert meta["rows"] == 2
+    assert "换手率" not in [c["name"] for c in meta["columns"]]
+    assert meta["columns"][0]["name"] == "日期"
+
+    # 指数列表
+    r3 = client.get("/api/datafeed/indexes")
+    assert r3.status_code == 200 and any(x["symbol"] == "000300" for x in r3.json())

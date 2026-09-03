@@ -8,6 +8,8 @@ from . import analysis
 from . import ai
 from . import cleaning
 from . import compare as compare_mod
+from . import datafeed
+from . import finance
 from . import deepprofile
 from . import exporter
 from . import forecast as forecast_mod
@@ -522,6 +524,159 @@ def ai_chart(body: AiChartBody):
         raise HTTPException(400, f"AI 配置执行失败（{spec.get('title', kind)}）：{e}")
     result["ai_spec"] = {"title": str(spec.get("title", "AI 图表"))[:40], "prompt": body.prompt[:120]}
     return result
+
+
+# ---------- 金融分析 ----------
+
+
+@router.get("/datasets/{ds_id}/finance/detect")
+def finance_detect(ds_id: str):
+    df = _load(ds_id)
+    return finance.detect_ohlcv(df)
+
+
+class FinanceMetricsBody(BaseModel):
+    close: str = ""
+    rf: float = 0.02
+    freq: str = "D"
+
+
+@router.post("/datasets/{ds_id}/finance/metrics")
+def finance_metrics(ds_id: str, body: FinanceMetricsBody):
+    df = _load(ds_id)
+    try:
+        return finance.metrics_report(df, body.model_dump())
+    except finance.FinanceError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/datasets/{ds_id}/finance/kline")
+def finance_kline(ds_id: str, body: dict = {}):
+    df = _load(ds_id)
+    try:
+        return finance.kline_payload(df, body or {})
+    except finance.FinanceError as e:
+        raise HTTPException(400, str(e))
+
+
+class TechBody(BaseModel):
+    indicator: str
+    close: str = ""
+    n: int = 0
+
+
+@router.post("/datasets/{ds_id}/finance/tech-indicator")
+def finance_tech(ds_id: str, body: TechBody):
+    _meta_or_404(ds_id)
+    df = _load(ds_id)
+    try:
+        params = {"indicator": body.indicator}
+        if body.close:
+            params["close"] = body.close
+        if body.n:
+            params["n"] = body.n
+        out, msg = finance.apply_tech_indicator(df, params)
+    except finance.FinanceError as e:
+        raise HTTPException(400, str(e))
+    meta = storage.save_df(ds_id, out, "技术指标", msg)
+    return {"message": msg, "meta": meta}
+
+
+class BenchmarkBody(BaseModel):
+    other_id: str
+    close: str = ""
+    bclose: str = ""
+    rf: float = 0.02
+
+
+@router.post("/datasets/{ds_id}/finance/benchmark")
+def finance_benchmark(ds_id: str, body: BenchmarkBody):
+    _meta_or_404(body.other_id)
+    try:
+        return finance.benchmark_compare(_load(ds_id), _load(body.other_id), body.model_dump())
+    except finance.FinanceError as e:
+        raise HTTPException(400, str(e))
+
+
+class PortfolioBody(BaseModel):
+    assets: list  # [{id, close, date}]
+    weights: list = []
+    rf: float = 0.02
+
+
+@router.post("/finance/portfolio")
+def finance_portfolio(body: PortfolioBody):
+    if len(body.assets) < 2:
+        raise HTTPException(400, "请至少选择 2 个资产")
+    dfs = []
+    try:
+        for a in body.assets:
+            meta = storage.get_meta(a["id"])
+            dfs.append({
+                "name": meta["name"][:12],
+                "df": storage.load_df(a["id"]),
+                "close": a.get("close", ""),
+                "date": a.get("date", ""),
+            })
+        return finance.portfolio_analysis(dfs, {"weights": body.weights, "rf": body.rf})
+    except (finance.FinanceError, DatasetNotFound) as e:
+        raise HTTPException(400, str(e))
+
+
+class FeedBody(BaseModel):
+    source: str = "stock"  # stock / index
+    symbol: str
+    start: str
+    end: str
+    period: str = "D"
+    adjust: str = "qfq"
+
+
+@router.post("/datafeed/fetch")
+def datafeed_fetch(body: FeedBody):
+    try:
+        if body.source == "index":
+            df = datafeed.fetch_index(body.symbol, body.start, body.end, body.period)
+            name = f"指数{body.symbol}"
+        else:
+            df = datafeed.fetch_stock(body.symbol, body.start, body.end, body.period, body.adjust)
+            name = f"股票{body.symbol}"
+    except datafeed.FeedError as e:
+        raise HTTPException(400, str(e))
+    ds_id = storage.create_dataset(name, df, f"{name}.csv", df.to_csv(index=False).encode("utf-8-sig"))
+    return {"id": ds_id, "meta": storage.get_meta(ds_id)}
+
+
+@router.get("/datafeed/indexes")
+def datafeed_indexes():
+    return datafeed.INDEX_SOURCES
+
+
+@router.get("/datafeed/search")
+def datafeed_search(q: str = Query("")):
+    try:
+        return datafeed.search_hot(q)
+    except datafeed.FeedError as e:
+        raise HTTPException(400, str(e))
+
+
+# 金融检验走通用 test 端点的扩展
+class FinanceTestBody(BaseModel):
+    test: str  # adf / ljung_box
+    params: dict = {}
+
+
+@router.post("/datasets/{ds_id}/finance/test")
+def finance_test(ds_id: str, body: FinanceTestBody):
+    df = _load(ds_id)
+    try:
+        if body.test == "adf":
+            return finance.adf_test(df, body.params)
+        if body.test == "ljung_box":
+            return finance.ljung_box_test(df, body.params)
+        raise HTTPException(400, f"未知金融检验: {body.test}")
+    except finance.FinanceError as e:
+        raise HTTPException(400, str(e))
 
 
 
