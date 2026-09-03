@@ -4,14 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>数据分析小助手</title>
-<link rel="stylesheet" href="/css/style.css?v=310">
+<link rel="stylesheet" href="/css/style.css?v=311">
 </head>
 <body>
 <div id="app" v-cloak>
 
   <!-- 顶部命令栏 -->
   <header class="topbar">
-    <div class="brand"><span class="logo">📊</span> 数据分析小助手</div>
+    <div class="brand clickable" title="返回主页" @click="goHome"><span class="logo">📊</span> 数据分析小助手</div>
     <div class="top-actions">
       <button class="btn primary" @click="$refs.file.click()" :disabled="busy">📥 导入文件</button>
       <input type="file" ref="file" style="display:none" @change="uploadFile" accept=".csv,.xlsx,.json,.txt">
@@ -1043,8 +1043,8 @@
   </div>
 </div>
 
-<script src="/vendor/echarts.min.js?v=310"></script>
-<script src="/vendor/vue.global.prod.js?v=310"></script>
-<script src="/js/app.js?v=310"></script>
+<script src="/vendor/echarts.min.js?v=311"></script>
+<script src="/vendor/vue.global.prod.js?v=311"></script>
+<script src="/js/app.js?v=311"></script>
 </body>
 </html>

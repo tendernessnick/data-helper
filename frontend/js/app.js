@@ -239,6 +239,14 @@ const app = createApp({
       return { count: "计数", sum: "求和", mean: "平均", min: "最小", max: "最大", median: "中位数", std: "标准差", nunique: "去重计数" }[a] || a;
     },
 
+    goHome() {
+      this.currentId = null;
+      this.meta = {};
+      this.previewOpen = true;
+      this.page = 1;
+      window.scrollTo(0, 0);
+    },
+
     toggleTheme() {
       this.theme = this.theme === "dark" ? "light" : "dark";
       document.documentElement.dataset.theme = this.theme;
