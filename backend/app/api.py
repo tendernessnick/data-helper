@@ -489,3 +489,39 @@ def ai_chat(body: AiChatBody):
     return {"reply": reply}
 
 
+class AiChartBody(BaseModel):
+    dataset_id: str
+    prompt: str
+
+
+@router.post("/ai/chart")
+def ai_chart(body: AiChartBody):
+    """自然语言 → 图表配置 → 直接执行分析，返回 spec + 结果。"""
+    _meta_or_404(body.dataset_id)
+    if not body.prompt.strip():
+        raise HTTPException(400, "请描述你想要的图表")
+    df = _load(body.dataset_id)
+    meta = storage.get_meta(body.dataset_id)
+    context = ai.build_context(meta, prof.profile_columns(df))
+    try:
+        spec = ai.chart_spec([{"role": "user", "content": body.prompt}], context)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    kind, params = spec["kind"], spec.get("params") or {}
+    # 分派执行：分析类走 analysis，特殊类型走各自端点逻辑
+    try:
+        if kind == "scatter":
+            result = deepprofile.interactions(df, params.get("x", ""), params.get("y", ""))
+        elif kind == "cross_heat":
+            result = suggest_mod.cross_heat(df, params)
+        elif kind == "forecast":
+            result = forecast_mod.forecast(df, params)
+        else:
+            result = analysis.run(df, kind, params)
+    except (analysis.AnalysisError,) as e:
+        raise HTTPException(400, f"AI 配置执行失败（{spec.get('title', kind)}）：{e}")
+    result["ai_spec"] = {"title": str(spec.get("title", "AI 图表"))[:40], "prompt": body.prompt[:120]}
+    return result
+
+
+

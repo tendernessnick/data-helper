@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>数据分析小助手</title>
-<link rel="stylesheet" href="/css/style.css">
+<link rel="stylesheet" href="/css/style.css?v=310">
 </head>
 <body>
 <div id="app" v-cloak>
@@ -103,32 +103,53 @@
 
       <!-- 结果画布 -->
       <div class="cards-grid" v-if="cards.length">
-        <div class="card-item" v-for="card in cards" :key="card.id" :class="{'span-2': card.span2}">
+        <div class="card-item" v-for="(card, cardIdx) in cards" :key="card.id" :class="{'span-2': card.span2}">
           <div class="card-head">
             <div>
               <b>{{ card.icon }} {{ card.title }}</b>
               <span class="card-time"> {{ card.time }}</span>
             </div>
-            <div style="display:flex;align-items:center;gap:6px">
-              <select v-if="card.chartDiv && card.type === 'table'" v-model="card.chartType" @change="renderCardChart(card)"
-                      style="width:96px;font-size:12px;padding:3px 6px">
-                <option value="bar">柱状图</option><option value="hbar">条形图</option>
-                <option value="line">折线图</option><option value="area">面积图</option>
-                <option value="pie">饼图</option><option value="treemap">矩形树图</option>
-                <option value="sunburst" v-if="card.payload.pareto">旭日图</option>
-              </select>
+            <div style="display:flex;align-items:center;gap:8px">
+              <div class="segmented" v-if="card.chartDiv && card.type === 'table' && isGenericChart(card)">
+                <button v-for="ct in chartTypes" :key="ct.v" :class="{on: card.chartType === ct.v}"
+                        @click="card.chartType = ct.v; renderCardChart(card)">{{ ct.l }}</button>
+              </div>
               <button class="btn sm ghost" v-if="card.type === 'corr'" @click="switchCorrMethod(card)" title="切换相关系数方法">{{ card.payload.method === 'pearson' ? 'Pearson' : card.payload.method === 'spearman' ? 'Spearman' : 'Kendall' }} ⟳</button>
+              <div class="card-order">
+                <button title="上移" :disabled="cardIdx === 0" @click="moveCard(cardIdx, -1)">▲</button>
+                <button title="下移" :disabled="cardIdx === cards.length - 1" @click="moveCard(cardIdx, 1)">▼</button>
+              </div>
               <button class="card-close" title="关闭" @click="removeCard(card)">✕</button>
             </div>
           </div>
           <div class="card-body">
             <!-- 洞察卡 -->
             <template v-if="card.type === 'insight'">
+              <div class="score-wrap" v-if="card.payload.quality_score">
+                <div class="score-ring">
+                  <svg width="92" height="92">
+                    <circle cx="46" cy="46" r="40" fill="none" :stroke="ringTrack" stroke-width="8"/>
+                    <circle cx="46" cy="46" r="40" fill="none" :stroke="card.payload.quality_score.color"
+                            stroke-width="8" stroke-linecap="round"
+                            :stroke-dasharray="2 * Math.PI * 40"
+                            :stroke-dashoffset="2 * Math.PI * 40 * (1 - card.payload.quality_score.score / 100)"
+                            style="transition: stroke-dashoffset 1s cubic-bezier(.25,.1,.25,1)"/>
+                  </svg>
+                  <div class="score-num"><b>{{ card.payload.quality_score.score }}</b><span>质量评分</span></div>
+                </div>
+                <div class="score-desc">
+                  <b>{{ card.payload.quality_score.level }}</b> · {{ card.payload.quality_score.note }}
+                  <div v-for="(d, i) in card.payload.quality_score.deductions" :key="i" style="margin-top:2px">
+                    <span style="color:var(--orange)">−{{ d.cut }}</span> {{ d.reason }}
+                  </div>
+                  <div v-if="!card.payload.quality_score.deductions.length" style="color:var(--green);margin-top:2px">无扣分项</div>
+                </div>
+              </div>
               <div class="ins-cards">
                 <div class="ins-kcard"><span>数据行</span><b>{{ card.payload.overview.rows.toLocaleString() }}</b></div>
                 <div class="ins-kcard"><span>数据列</span><b>{{ card.payload.overview.cols }}</b></div>
-                <div class="ins-kcard"><span>重复行</span><b :style="card.payload.overview.duplicates ? 'color:var(--danger)' : ''">{{ card.payload.overview.duplicates }}</b></div>
-                <div class="ins-kcard"><span>缺失占比</span><b :style="card.payload.overview.missing_pct > 10 ? 'color:var(--danger)' : ''">{{ card.payload.overview.missing_pct }}%</b></div>
+                <div class="ins-kcard"><span>重复行</span><b :style="card.payload.overview.duplicates ? 'color:var(--red)' : ''">{{ card.payload.overview.duplicates }}</b></div>
+                <div class="ins-kcard"><span>缺失占比</span><b :style="card.payload.overview.missing_pct > 10 ? 'color:var(--red)' : ''">{{ card.payload.overview.missing_pct }}%</b></div>
                 <div class="ins-kcard"><span>内存</span><b>{{ card.payload.overview.mem_mb }}MB</b></div>
               </div>
               <ul class="ins-alerts"><li v-for="(a, i) in card.payload.alerts" :key="i">{{ a }}</li></ul>
@@ -900,7 +921,10 @@
                 <textarea v-model="aiInput" style="min-height:38px" @keydown.enter.exact.prevent="sendAi" placeholder="Enter 发送"></textarea>
                 <button class="btn primary" @click="sendAi" :disabled="busy || !aiInput.trim()">发送</button>
               </div>
-              <button class="btn sm ghost" style="margin-top:6px;color:var(--text-2)" @click="askAiInsight" :disabled="busy">💡 让 AI 解读洞察结果</button>
+              <div style="display:flex;gap:8px;margin-top:6px">
+                <button class="btn sm ghost" style="flex:1;color:var(--text-2)" @click="askAiInsight" :disabled="busy">💡 AI 解读洞察</button>
+                <button class="ai-chart-btn" style="flex:1" @click="askAiChart" :disabled="busy || !aiInput.trim()" title="在输入框描述想要的图表，如：各月销售额趋势">📊 按描述出图</button>
+              </div>
             </div>
           </template>
         </div>
@@ -975,8 +999,8 @@
   </div>
 </div>
 
-<script src="/vendor/echarts.min.js"></script>
-<script src="/vendor/vue.global.prod.js"></script>
-<script src="/js/app.js"></script>
+<script src="/vendor/echarts.min.js?v=310"></script>
+<script src="/vendor/vue.global.prod.js?v=310"></script>
+<script src="/js/app.js?v=310"></script>
 </body>
 </html>

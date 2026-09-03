@@ -279,3 +279,45 @@ def test_chart_suggest_and_cross_heat():
     assert r2.status_code == 200
     body = r2.json()
     assert body["heatmap"]["values"][0][0] >= 0
+
+
+# ---------- AI 自然语言出图 ----------
+
+
+def test_ai_chart_spec_to_card():
+    from unittest import mock
+    ds = upload_df(sales_df(100))
+    client.put("/api/ai/settings", json={"api_key": "sk-x", "base_url": "https://fake/v4", "model": "m"})
+    fake = mock.Mock()
+    fake.status_code = 200
+    fake.json.return_value = {"choices": [{"message": {"content": '```json\n{"kind": "groupby", "params": {"by": ["地区"], "metrics": [{"column": "销售额", "agg": "sum"}]}, "title": "各地区销售额"}\n```'}}]}
+    with mock.patch.object(__import__("backend.app.ai", fromlist=["requests"]).requests, "post", return_value=fake):
+        r = client.post("/api/ai/chart", json={"dataset_id": ds, "prompt": "各地区的销售额"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ai_spec"]["title"] == "各地区销售额"
+    assert {row[0] for row in body["rows"]} == {"华东", "华南", "华北"}
+    client.put("/api/ai/settings", json={"api_key": "", "base_url": "", "model": ""})
+
+
+def test_ai_chart_bad_json_400():
+    from unittest import mock
+    ds = upload_df(sales_df(50))
+    client.put("/api/ai/settings", json={"api_key": "sk-x", "base_url": "https://fake/v4", "model": "m"})
+    fake = mock.Mock()
+    fake.status_code = 200
+    fake.json.return_value = {"choices": [{"message": {"content": "我觉得画个图挺好的"}}]}
+    with mock.patch.object(__import__("backend.app.ai", fromlist=["requests"]).requests, "post", return_value=fake):
+        r = client.post("/api/ai/chart", json={"dataset_id": ds, "prompt": "画图"})
+    assert r.status_code == 400
+    assert "图表配置" in r.json()["detail"]
+    client.put("/api/ai/settings", json={"api_key": "", "base_url": "", "model": ""})
+
+
+def test_quality_score_in_insights():
+    ds = upload_df(sales_df(80))
+    ins = client.get(f"/api/datasets/{ds}/insights").json()
+    qs = ins["quality_score"]
+    assert 0 <= qs["score"] <= 100
+    assert qs["level"] in ("优秀", "良好", "一般", "较差")
+    assert qs["color"].startswith("#")

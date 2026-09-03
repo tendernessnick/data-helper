@@ -34,6 +34,12 @@ const app = createApp({
       // 图表推荐
       suggestions: [],
 
+      // 图表类型（分段控件）
+      chartTypes: [
+        { v: "bar", l: "柱状" }, { v: "hbar", l: "条形" }, { v: "line", l: "折线" },
+        { v: "area", l: "面积" }, { v: "pie", l: "饼图" }, { v: "treemap", l: "树图" },
+      ],
+
       // 画像（列选择数据源）
       profile: { rows: 0, columns: [] },
 
@@ -108,6 +114,9 @@ const app = createApp({
   },
 
   computed: {
+    ringTrack() {
+      return this.theme === "dark" ? "rgba(255,255,255,.08)" : "rgba(0,0,0,.06)";
+    },
     totalPages() {
       return Math.max(1, Math.ceil((this.rowsData.total || 0) / this.pageSize));
     },
@@ -216,11 +225,52 @@ const app = createApp({
     chartTheme() {
       const dark = this.theme === "dark";
       return {
-        txt: dark ? "#9ca3af" : "#6b7280",
-        txtEm: dark ? "#e5e7eb" : "#1f2937",
-        split: dark ? "#374151" : "#e5e7eb",
-        tipBg: dark ? "#1a2233" : "#ffffff",
+        txt: dark ? "#98989d" : "#6e6e73",
+        txtEm: dark ? "#f5f5f7" : "#1d1d1f",
+        split: dark ? "rgba(255,255,255,.08)" : "rgba(0,0,0,.07)",
+        // Apple 系统色板
+        palette: dark
+          ? ["#0a84ff", "#30d158", "#ff9f0a", "#ff453a", "#bf5af2", "#64d2ff", "#ffd60a", "#ff375f"]
+          : ["#007aff", "#34c759", "#ff9500", "#ff3b30", "#af52ce", "#32ade6", "#ffcc00", "#ff2d55"],
+        blue: dark ? "#0a84ff" : "#007aff",
+        orange: dark ? "#ff9f0a" : "#ff9500",
+        tipBg: dark ? "rgba(40,40,43,.92)" : "rgba(255,255,255,.92)",
       };
+    },
+
+    isGenericChart(card) {
+      const R = card.payload;
+      return !(R.matrix || R.box_stats || R.pareto || R.points || R.forecast_meta || R.heatmap || R.row_labels);
+    },
+
+    moveCard(idx, dir) {
+      const j = idx + dir;
+      if (j < 0 || j >= this.cards.length) return;
+      const arr = this.cards;
+      [arr[idx], arr[j]] = [arr[j], arr[idx]];
+      this.cards = [...arr];
+    },
+
+    async askAiChart() {
+      const prompt = this.aiInput.trim();
+      if (!prompt) { this.toast("请先在输入框描述想要的图表，如：各月销售额趋势", "error"); return; }
+      this.aiInput = "";
+      this.aiMessages.push({ role: "user", content: "📊 出图指令：" + prompt });
+      this.busy = true;
+      this.scrollChat();
+      try {
+        const R = await this.api("POST", "/api/ai/chart", { dataset_id: this.currentId, prompt });
+        const spec = R.ai_spec || {};
+        delete R.ai_spec;
+        this.addCard({
+          type: R.matrix ? "table" : (R.backtest ? "table" : "table"),
+          icon: "🤖", title: spec.title || "AI 图表", payload: R, span2: !!R.forecast_meta,
+        });
+        this.aiMessages.push({ role: "assistant", content: `已生成图表「${spec.title || "AI 图表"}」，见画布卡片。` });
+      } catch (e) {
+        this.aiMessages.push({ role: "assistant", content: "⚠ " + e.message });
+        this.toast(e.message, "error");
+      } finally { this.busy = false; this.scrollChat(); }
     },
 
     // ---------- 卡片系统 ----------
@@ -318,7 +368,7 @@ const app = createApp({
             grid: { left: 55, right: 20, top: 20, bottom: 50 },
             xAxis: { type: "category", data: stats.map((s) => s.name), axisLabel: { rotate: 25, fontSize: 11, color: T.txt } },
             yAxis: { type: "value", scale: true, axisLabel: { color: T.txt }, splitLine: { lineStyle: { color: T.split } } },
-            series: [{ type: "boxplot", data: stats.map((s) => [Math.max(s.min, s.lower), s.q1, s.median, s.q3, Math.min(s.max, s.upper)]) }],
+            series: [{ type: "boxplot", data: stats.map((s) => [Math.max(s.min, s.lower), s.q1, s.median, s.q3, Math.min(s.max, s.upper)]), itemStyle: { color: T.palette[0] + "33", borderColor: T.palette[0] } }],
           });
           return;
         }
@@ -339,8 +389,8 @@ const app = createApp({
               { type: "value", max: 100, axisLabel: { formatter: "{value}%", color: T.txt }, splitLine: { show: false } },
             ],
             series: [
-              { name: R.columns[1] ? R.columns[1].name : "数值", type: "bar", data: values, itemStyle: { color: "#2563eb" } },
-              { name: "累计占比%", type: "line", yAxisIndex: 1, data: cums, smooth: true, itemStyle: { color: "#d97706" }, markLine: { data: [{ yAxis: 80, name: "80%" }], lineStyle: { type: "dashed", color: "#dc2626" }, label: { formatter: "80%" } } },
+              { name: R.columns[1] ? R.columns[1].name : "数值", type: "bar", data: values, itemStyle: { color: T.palette[0], borderRadius: [4, 4, 0, 0] } },
+              { name: "累计占比%", type: "line", yAxisIndex: 1, data: cums, smooth: true, itemStyle: { color: T.orange }, lineStyle: { color: T.orange }, markLine: { data: [{ yAxis: 80, name: "80%" }], lineStyle: { type: "dashed", color: T.palette[3] }, label: { formatter: "80%", color: T.txt } } },
             ],
           });
           return;
@@ -353,7 +403,7 @@ const app = createApp({
             grid: { left: 60, right: 20, top: 25, bottom: 45 },
             xAxis: { type: "value", scale: true, name: R.x, nameTextStyle: { color: T.txt }, axisLabel: { color: T.txt }, splitLine: { lineStyle: { color: T.split } } },
             yAxis: { type: "value", scale: true, name: R.y, nameTextStyle: { color: T.txt }, axisLabel: { color: T.txt }, splitLine: { lineStyle: { color: T.split } } },
-            series: [{ type: "scatter", data: R.points, symbolSize: 7, itemStyle: { color: "#2563eb", opacity: .65 } }],
+            series: [{ type: "scatter", data: R.points, symbolSize: 7, itemStyle: { color: T.palette[0], opacity: .6 } }],
           });
           return;
         }
@@ -379,10 +429,10 @@ const app = createApp({
             xAxis: { type: "category", data: allLabels, axisLabel: { rotate: 35, fontSize: 10, color: T.txt } },
             yAxis: { type: "value", scale: true, axisLabel: { color: T.txt }, splitLine: { lineStyle: { color: T.split } } },
             series: [
-              { name: "实际值", type: "line", data: histData, smooth: true, symbolSize: 3, itemStyle: { color: "#2563eb" } },
-              { name: `预测值（${R.best}）`, type: "line", data: fcData, smooth: true, lineStyle: { type: "dashed", color: "#d97706" }, itemStyle: { color: "#d97706" } },
+              { name: "实际值", type: "line", data: histData, smooth: true, symbolSize: 3, itemStyle: { color: T.palette[0] }, lineStyle: { color: T.palette[0], width: 2.5 } },
+              { name: `预测值（${R.best}）`, type: "line", data: fcData, smooth: true, lineStyle: { type: "dashed", color: T.orange, width: 2.5 }, itemStyle: { color: T.orange } },
               { name: "band-base", type: "line", data: lowerData, stack: "band", symbol: "none", lineStyle: { opacity: 0 }, tooltip: { show: false }, silent: true },
-              { name: "95%区间", type: "line", data: bandData, stack: "band", symbol: "none", lineStyle: { opacity: 0 }, areaStyle: { color: "rgba(217,119,6,.15)" }, tooltip: { show: false }, silent: true },
+              { name: "95%区间", type: "line", data: bandData, stack: "band", symbol: "none", lineStyle: { opacity: 0 }, areaStyle: { color: T.orange + "26" }, tooltip: { show: false }, silent: true },
             ],
           });
           return;
@@ -405,6 +455,7 @@ const app = createApp({
               type: "pie", radius: ["28%", "62%"], center: ["50%", "46%"],
               data: R.rows.map((r, i) => ({ name: labels[i], value: r[valIdxs[0]] })),
               label: { fontSize: 11, color: T.txt },
+              color: T.palette,
             }],
           });
           return;
@@ -421,8 +472,9 @@ const app = createApp({
         }
         const catAxis = { type: "category", data: labels, axisLabel: { rotate: 35, fontSize: 11, color: T.txt } };
         const valAxis = { type: "value", scale: true, axisLabel: { color: T.txt }, splitLine: { lineStyle: { color: T.split } } };
-        const series = valIdxs.map((i) => {
-          const s = { name: cols[i].name, type: card.chartType === "area" ? "line" : card.chartType, smooth: true, emphasis: { focus: "series" }, data: R.rows.map((r) => r[i]) };
+        const series = valIdxs.map((i, si) => {
+          const s = { name: cols[i].name, type: card.chartType === "area" ? "line" : card.chartType, smooth: true, emphasis: { focus: "series" }, data: R.rows.map((r) => r[i]), color: T.palette[si % T.palette.length] };
+          if (card.chartType === "bar") s.itemStyle = { borderRadius: [4, 4, 0, 0] };
           if (card.chartType === "area") s.areaStyle = { opacity: .15 };
           if (card.chartType === "hbar") { s.type = "bar"; }
           return s;

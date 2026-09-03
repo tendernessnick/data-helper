@@ -28,6 +28,67 @@ def _detect_date_col(df: pd.DataFrame):
     return None, None
 
 
+def quality_score(df: pd.DataFrame, insights: dict) -> dict:
+    """数据质量评分（0-100）：加权扣分制，输出分数、等级与扣分明细。"""
+    n = max(len(df), 1)
+    m = max(df.shape[1], 1)
+    score = 100.0
+    deductions = []
+
+    dup = insights["overview"]["duplicates"]
+    if dup:
+        cut = min(15.0, dup / n * 100 * 0.5)
+        score -= cut
+        deductions.append((f"{dup} 行重复数据", cut))
+
+    miss_pct = insights["overview"]["missing_pct"]
+    if miss_pct > 0:
+        cut = min(25.0, miss_pct * 0.5)
+        score -= cut
+        deductions.append((f"缺失单元格占 {miss_pct}%", cut))
+
+    const_cols = [q for q in insights["quality"] if "常量列" in q["msg"]]
+    if const_cols:
+        cut = min(15.0, len(const_cols) * 5)
+        score -= cut
+        deductions.append((f"{len(const_cols)} 个常量列", cut))
+
+    high_missing = [c for c in insights.get("_col_missing", []) if c["pct"] > 30]
+    if high_missing:
+        cut = min(15.0, len(high_missing) * 5)
+        score -= cut
+        deductions.append((f"{len(high_missing)} 列缺失超 30%", cut))
+
+    skewed = [x for x in insights["numeric"] if x["skew"] is not None and abs(x["skew"]) > 2]
+    if skewed:
+        cut = min(10.0, len(skewed) * 2)
+        score -= cut
+        deductions.append((f"{len(skewed)} 列分布严重偏斜", cut))
+
+    outlier_heavy = [x for x in insights["numeric"] if x["outlier_pct"] > 5]
+    if outlier_heavy:
+        cut = min(9.0, len(outlier_heavy) * 3)
+        score -= cut
+        deductions.append((f"{len(outlier_heavy)} 列离群值占比超 5%", cut))
+
+    score = max(0.0, round(score, 1))
+    if score >= 90:
+        level, color = "优秀", "#34c759"
+    elif score >= 75:
+        level, color = "良好", "#007aff"
+    elif score >= 60:
+        level, color = "一般", "#ff9500"
+    else:
+        level, color = "较差", "#ff3b30"
+    return {
+        "score": score,
+        "level": level,
+        "color": color,
+        "deductions": [{"reason": r, "cut": round(c, 1)} for r, c in deductions],
+        "note": "评分基于重复、缺失、常量列、偏态与离群值的加权扣分（满分 100）",
+    }
+
+
 def run_insights(df: pd.DataFrame, meta: dict) -> dict:
     n, m = len(df), df.shape[1]
     alerts = []
@@ -188,7 +249,7 @@ def run_insights(df: pd.DataFrame, meta: dict) -> dict:
     if not any(a.startswith(("🔴", "🟡")) for a in alerts):
         alerts.insert(0, "🟢 未发现明显数据质量问题，可以直接开始分析")
 
-    return {
+    result = {
         "overview": overview,
         "quality": quality,
         "numeric": numeric,
@@ -196,4 +257,10 @@ def run_insights(df: pd.DataFrame, meta: dict) -> dict:
         "datetime": datetime_info,
         "correlations": correlations,
         "alerts": alerts,
+        "_col_missing": [
+            {"name": str(c), "pct": round(float(df[c].isna().mean() * 100), 2)} for c in df.columns
+        ],
     }
+    result["quality_score"] = quality_score(df, result)
+    del result["_col_missing"]
+    return result
