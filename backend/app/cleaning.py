@@ -167,6 +167,29 @@ def drop_columns(df, params):
     return out, f"删除列: {', '.join(map(str, columns))}"
 
 
+def drop_outliers(df, params):
+    """按 IQR 边界剔除数值列的异常值行。"""
+    columns = params.get("columns") or []
+    method = params.get("method", "iqr")
+    if not columns:
+        raise CleanError("请选择要检测异常值的数值列")
+    _check_columns(df, columns)
+    from .analysis import outlier_bounds
+
+    mask = pd.Series(False, index=df.index)
+    for c in columns:
+        if not pd.api.types.is_numeric_dtype(df[c]):
+            raise CleanError(f"列 [{c}] 不是数值列")
+        _, _, m = outlier_bounds(df[c], method)
+        mask |= m.fillna(False)
+    before = len(df)
+    out = df[~mask].reset_index(drop=True)
+    if out.empty:
+        raise CleanError("剔除异常值后结果为 0 行，已取消操作")
+    removed = before - len(out)
+    return out, f"剔除异常值行 {removed} 行（{ 'IQR' if method == 'iqr' else 'Z-score' }，涉及列: {', '.join(map(str, columns))}）"
+
+
 OPS = {
     "drop_duplicates": drop_duplicates,
     "drop_missing": drop_missing,
@@ -175,6 +198,7 @@ OPS = {
     "cast_type": cast_type,
     "filter_rows": filter_rows,
     "drop_columns": drop_columns,
+    "drop_outliers": drop_outliers,
 }
 
 

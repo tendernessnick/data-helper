@@ -261,6 +261,225 @@ def moving_avg(df: pd.DataFrame, params: dict) -> dict:
     }
 
 
+RFM_SEGMENTS = (
+    (True, True, True, "重要价值客户"),
+    (True, True, False, "重要保持客户"),
+    (True, False, True, "重要发展客户"),
+    (False, True, True, "重要挽留客户"),
+    (True, False, False, "一般发展客户"),
+    (False, True, False, "一般保持客户"),
+    (False, False, True, "一般挽留客户"),
+    (False, False, False, "一般客户"),
+)
+
+
+def _score_1to5(series: pd.Series, higher_is_better: bool) -> pd.Series:
+    """把数值列打为 1~5 分（五分位）。rank 保证小样本不出现重复边界。"""
+    rank = series.rank(ascending=higher_is_better, method="first")
+    try:
+        return pd.qcut(rank, 5, labels=False) + 1
+    except ValueError:
+        # 极端小样本兜底：按排名百分位映射
+        return (rank / len(rank) * 5).ceil().clip(1, 5).astype(int)
+
+
+def rfm(df: pd.DataFrame, params: dict) -> dict:
+    """RFM 客户价值分析：最近消费 R / 频次 F / 金额 M，五分位打分 + 8 层分层。"""
+    id_col = params.get("id_column", "")
+    date_col = params.get("date_column", "")
+    value_col = params.get("value_column", "")
+    for c, label in ((id_col, "客户/主体列"), (date_col, "日期列"), (value_col, "金额列")):
+        if c:
+            _check(df, c)
+    if not (id_col and date_col and value_col):
+        raise AnalysisError("RFM 需要 客户列、日期列、金额列 三项")
+    dates = df[date_col]
+    if not pd.api.types.is_datetime64_any_dtype(dates):
+        dates = pd.to_datetime(dates, errors="coerce")
+    tmp = pd.DataFrame(
+        {
+            "客户": df[id_col].astype(str),
+            "日期": dates,
+            "金额": pd.to_numeric(df[value_col], errors="coerce"),
+        }
+    ).dropna()
+    if tmp.empty:
+        raise AnalysisError("有效数据为空（日期或金额无法解析）")
+    g = tmp.groupby("客户").agg(最近消费=("日期", "max"), 消费频次=("日期", "count"), 消费金额=("金额", "sum"))
+    g["R天数"] = (g["最近消费"].max() - g["最近消费"]).dt.days
+    g["R分"] = _score_1to5(g["R天数"], higher_is_better=False)  # 天数越小分越高
+    g["F分"] = _score_1to5(g["消费频次"], higher_is_better=True)
+    g["M分"] = _score_1to5(g["消费金额"], higher_is_better=True)
+
+    def _seg(row):
+        for r, f, m, name in RFM_SEGMENTS:
+            if (row["R分"] >= 3) == r and (row["F分"] >= 3) == f and (row["M分"] >= 3) == m:
+                return name
+        return "一般客户"
+
+    g["分层"] = g.apply(_seg, axis=1)
+    total_m = g["消费金额"].sum()
+    summary = (
+        g.groupby("分层")
+        .agg(客户数=("分层", "size"), 金额合计=("消费金额", "sum"))
+        .sort_values("金额合计", ascending=False)
+    )
+    summary["金额占比%"] = (summary["金额合计"] / total_m * 100).round(2)
+    from .serialize import cell
+
+    summary_rows = [
+        [idx, int(r["客户数"]), cell(r["金额合计"]), cell(r["金额占比%"])]
+        for idx, r in summary.iterrows()
+    ]
+    detail = g.sort_values("消费金额", ascending=False)
+    detail_rows = [
+        [
+            idx,
+            r["最近消费"].strftime("%Y-%m-%d"),
+            int(r["R天数"]),
+            int(r["消费频次"]),
+            cell(r["消费金额"]),
+            int(r["R分"]),
+            int(r["F分"]),
+            int(r["M分"]),
+            r["分层"],
+        ]
+        for idx, r in detail.iterrows()
+    ]
+    return {
+        "columns": [
+            {"name": "分层", "numeric": False},
+            {"name": "客户数", "numeric": True},
+            {"name": "金额合计", "numeric": True},
+            {"name": "金额占比%", "numeric": True},
+        ],
+        "rows": summary_rows,
+        "detail": {
+            "columns": [
+                {"name": "客户", "numeric": False},
+                {"name": "最近消费", "numeric": False},
+                {"name": "R天数", "numeric": True},
+                {"name": "消费频次", "numeric": True},
+                {"name": "消费金额", "numeric": True},
+                {"name": "R分", "numeric": True},
+                {"name": "F分", "numeric": True},
+                {"name": "M分", "numeric": True},
+                {"name": "分层", "numeric": False},
+            ],
+            "rows": detail_rows[:500],
+        },
+        "note": f"RFM 客户分层：{len(g)} 个客户，合计金额 {round(float(total_m), 2)}（明细显示前 500）",
+        "chart": {"type": "pie", "label_col": "分层"},
+    }
+
+
+def pareto(df: pd.DataFrame, params: dict) -> dict:
+    """ABC / 帕累托分析：找出贡献主要价值的少数项目。"""
+    cat_col = params.get("category_column", "")
+    value_col = params.get("value_column", "")
+    top_n = int(params.get("top_n", 30))
+    _check(df, cat_col)
+    _check(df, value_col)
+    tmp = pd.DataFrame(
+        {"类别": df[cat_col].astype(str), "值": pd.to_numeric(df[value_col], errors="coerce")}
+    ).dropna()
+    if tmp.empty:
+        raise AnalysisError("没有有效数值行")
+    g = tmp.groupby("类别")["值"].sum().sort_values(ascending=False)
+    if len(g) > top_n:
+        head, tail = g.head(top_n), g.iloc[top_n:]
+        g = pd.concat([head, pd.Series([tail.sum()], index=[f"其他({len(tail)}项)"])])
+    share = (g / g.sum() * 100).round(2)
+    cum = share.cumsum().round(2)
+
+    def _cls(prev_cum):
+        if prev_cum < 80:
+            return "A"
+        return "B" if prev_cum < 95 else "C"
+
+    rows_out = []
+    n_a = n_b = 0
+    for idx, v in g.items():
+        prev = round(float(cum[idx] - share[idx]), 2)
+        cls = _cls(prev)
+        n_a += cls == "A"
+        n_b += cls == "B"
+        rows_out.append([idx, round(float(v), 4), float(share[idx]), float(cum[idx]), cls])
+    a_share = rows_out[n_a - 1][3] if n_a else 0
+    return {
+        "columns": [
+            {"name": str(cat_col), "numeric": False},
+            {"name": str(value_col), "numeric": True},
+            {"name": "占比%", "numeric": True},
+            {"name": "累计占比%", "numeric": True},
+            {"name": "ABC分级", "numeric": False},
+        ],
+        "rows": rows_out,
+        "note": f"帕累托/ABC：A 类 {n_a} 项贡献 {a_share}%（≤80%），B 类 {n_b} 项，其余为 C 类",
+        "pareto": True,
+    }
+
+
+def outlier_bounds(s: pd.Series, method: str = "iqr", k: float = 3.0):
+    """返回 (下界, 上界, 离群布尔掩码)；s 需为数值列。"""
+    s2 = s.dropna()
+    if s2.empty:
+        return None, None, pd.Series(False, index=s.index)
+    if method == "zscore":
+        mean, std = float(s2.mean()), float(s2.std(ddof=0))
+        if std == 0:
+            return None, None, pd.Series(False, index=s.index)
+        z = (s - mean).abs() / std
+        return None, None, z > k
+    q1, q3 = s2.quantile([0.25, 0.75])
+    iqr = q3 - q1
+    lower, upper = q1 - 1.5 * iqr, q3 + 1.5 * iqr
+    return lower, upper, (s < lower) | (s > upper)
+
+
+def outliers(df: pd.DataFrame, params: dict) -> dict:
+    """异常值统计（IQR / Z-score）。"""
+    cols = params.get("columns") or _num_cols(df)
+    method = params.get("method", "iqr")
+    if method not in ("iqr", "zscore"):
+        raise AnalysisError("method 仅支持 iqr / zscore")
+    if not cols:
+        raise AnalysisError("没有数值列")
+    rows_out = []
+    for c in cols:
+        _check(df, c)
+        if not pd.api.types.is_numeric_dtype(df[c]):
+            continue
+        lower, upper, mask = outlier_bounds(df[c], method)
+        n = int(mask.sum())
+        rows_out.append(
+            [
+                str(c),
+                None if lower is None else round(float(lower), 6),
+                None if upper is None else round(float(upper), 6),
+                n,
+                round(n / max(len(df), 1) * 100, 2),
+                round(float(df[c].min()), 6),
+                round(float(df[c].max()), 6),
+            ]
+        )
+    if not rows_out:
+        raise AnalysisError("所选列均无数值数据")
+    return {
+        "columns": [
+            {"name": "列", "numeric": False},
+            {"name": "下界", "numeric": True},
+            {"name": "上界", "numeric": True},
+            {"name": "离群数", "numeric": True},
+            {"name": "离群占比%", "numeric": True},
+            {"name": "最小值", "numeric": True},
+            {"name": "最大值", "numeric": True},
+        ],
+        "rows": rows_out,
+        "note": f"异常值检测（{ 'IQR 1.5倍四分位距' if method == 'iqr' else 'Z-score |z|>3' }）；可在清洗中用「剔除异常值」一键处理",
+    }
+
+
 def value_counts(df: pd.DataFrame, params: dict) -> dict:
     column = params.get("column")
     top = int(params.get("top", 20))
@@ -301,6 +520,9 @@ KINDS = {
     "trend": trend,
     "growth": growth,
     "moving_avg": moving_avg,
+    "rfm": rfm,
+    "pareto": pareto,
+    "outliers": outliers,
 }
 
 
