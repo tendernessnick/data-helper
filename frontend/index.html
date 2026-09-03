@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>数据分析小助手</title>
-<link rel="stylesheet" href="/css/style.css?v=320">
+<link rel="stylesheet" href="/css/style.css?v=330">
 </head>
 <body>
 <div id="app" v-cloak>
@@ -18,6 +18,7 @@
       <button class="btn" @click="openPaste" :disabled="busy">📋 粘贴数据</button>
       <button class="btn" @click="createSample" :disabled="busy">✨ 示例数据</button>
       <span class="strip-sep" style="height:22px"></span>
+      <button class="btn" :class="{primary: mainView === 'ai'}" @click="mainView = mainView === 'ai' ? 'data' : 'ai'">🤖 AI 对话</button>
       <button class="btn ghost" :title="theme === 'dark' ? '切换到亮色' : '切换到暗色'" @click="toggleTheme">{{ theme === 'dark' ? '☀️' : '🌙' }}</button>
     </div>
   </header>
@@ -47,8 +48,62 @@
       </div>
     </aside>
 
+    <!-- 中：AI 对话页（独立主视图） -->
+    <main class="canvas ai-room" v-if="mainView === 'ai'">
+      <div class="ai-head">
+        <div class="ai-head-title">
+          <b>🤖 AI 分析助手</b>
+          <span class="badge-dot" :class="{on: aiConfigured}"></span>
+          <span class="ai-head-model">{{ aiConfigured ? aiSettings.model : '未连接' }}</span>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn sm" @click="aiSettingsOpen = true">⚙️ 连接设置</button>
+          <button class="btn sm ghost" v-if="meta.id" @click="mainView = 'data'">← 返回数据</button>
+        </div>
+      </div>
+
+      <div class="ai-thread" ref="chatMsgs">
+        <div class="ai-welcome" v-if="!aiMessages.length">
+          <div class="ai-welcome-icon">🤖</div>
+          <h2>问问你的数据</h2>
+          <p v-if="meta.id">当前数据集：<b>{{ meta.name }}</b>（{{ meta.rows }} 行 × {{ meta.cols }} 列）——AI 会结合它的结构回答</p>
+          <p v-else>提示：先在左侧选择一个数据集，AI 回答会自动带上该数据集的结构摘要</p>
+          <div class="ai-sugs">
+            <button @click="askSuggest('哪个类别的销售额最高？为什么？')">📊 哪个类别的销售额最高？</button>
+            <button @click="askSuggest('分析各月销售额趋势，指出明显的变化点')">📉 分析各月趋势与突变点</button>
+            <button @click="askSuggest('数据有哪些质量问题？给出清洗建议')">🧹 数据质量与清洗建议</button>
+            <button @click="askSuggest('帮我写一段 pandas 代码：新增客单价列并剔除异常值')">🐍 帮我写处理代码</button>
+          </div>
+        </div>
+        <div class="ai-msg" :class="m.role" v-for="(m, i) in aiMessages" :key="i">
+          <div class="who">{{ m.role === 'user' ? '我' : 'AI 助手' }}</div>
+          <div class="bubble">
+            <template v-for="(seg, j) in parseMsg(m.content)" :key="j">
+              <pre v-if="seg.code">{{ seg.text }}</pre>
+              <template v-else>{{ seg.text }}</template>
+            </template>
+          </div>
+          <div class="ai-msg-actions" v-if="m.role === 'assistant' && msgHasCode(m)">
+            <button class="btn sm" @click="useAiCode(m)">▶ 放入 Python 变换</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="ai-composer">
+        <div class="chat-input">
+          <textarea v-model="aiInput" rows="1" @input="autoGrow" @keydown.enter.exact.prevent="sendAi" placeholder="问点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
+          <button class="send-btn" :class="{ready: aiInput.trim()}" @click="sendAi" :disabled="busy || !aiInput.trim()" title="发送">↑</button>
+        </div>
+        <div class="chat-quick">
+          <button @click="askAiInsight" :disabled="busy || !meta.id" title="基于一键洞察结果生成业务解读">💡 解读洞察</button>
+          <button @click="askAiChart" :disabled="busy || !aiInput.trim()" title="把输入框的描述直接生成图表卡片">📊 描述出图</button>
+          <button v-if="aiMessages.length" class="danger" @click="aiMessages = []" :disabled="busy">🗑 清空对话</button>
+        </div>
+      </div>
+    </main>
+
     <!-- 中：画布 -->
-    <main class="canvas" v-if="meta.id">
+    <main class="canvas" v-else-if="meta.id">
       <!-- 操作条 -->
       <div class="ds-strip">
         <span class="ds-title">{{ meta.name }}</span>
@@ -1081,84 +1136,6 @@
         </div>
       </div>
 
-      <!-- AI 问答 -->
-      <div class="dock-sec">
-        <div class="dock-sec-head" @click="openSec.ai = !openSec.ai">
-          <b>🤖 AI 问答 <span class="badge-dot" :class="{on: aiConfigured}"></span></b>
-          <span class="arrow" :class="{open: openSec.ai}">▶</span>
-        </div>
-        <div class="dock-sec-body" v-show="openSec.ai">
-
-          <!-- 连接设置视图 -->
-          <template v-if="aiView === 'settings'">
-            <div class="dock-hint" style="margin-bottom:10px">
-              兼容 OpenAI 风格接口（智谱 GLM / DeepSeek / OpenAI 等）。<b>API Key 仅保存在本机</b>，请求直接从本机发出。
-            </div>
-            <div class="field"><label>API Base URL</label>
-              <input type="text" v-model="aiSettings.base_url" placeholder="https://open.bigmodel.cn/api/paas/v4">
-            </div>
-            <div class="field"><label>模型名称</label>
-              <input type="text" v-model="aiSettings.model" placeholder="glm-4.5-flash">
-            </div>
-            <div class="field"><label>API Key</label>
-              <input type="password" v-model="aiSettings.api_key" placeholder="sk-...">
-            </div>
-            <div style="display:flex;gap:8px;margin-top:4px">
-              <button class="btn primary" style="flex:1" @click="saveAiSettings" :disabled="busy">保存</button>
-              <button class="btn" v-if="aiConfigured" @click="aiView = 'chat'">返回对话</button>
-            </div>
-            <div class="dock-hint" style="margin-top:8px" v-if="aiConfigured">已连接：<b>{{ aiSettings.model }}</b></div>
-          </template>
-
-          <!-- 对话视图 -->
-          <template v-else-if="aiConfigured">
-            <div class="chat-status">
-              <span class="badge-dot on"></span>
-              <span class="chat-status-model" :title="aiSettings.base_url">{{ aiSettings.model }}</span>
-              <button class="chat-gear" title="AI 连接设置" @click="aiView = 'settings'">⚙️</button>
-            </div>
-            <div class="chat-msgs" ref="chatMsgs">
-              <div class="chat-welcome" v-if="!aiMessages.length">
-                <div class="chat-welcome-icon">🤖</div>
-                <b>向 AI 提问当前数据集</b>
-                <span>它会结合数据结构回答，还可以：</span>
-                <button @click="aiInput = '哪个类别的销售额最高？'">哪个类别销售额最高？</button>
-                <button @click="aiInput = '分析各月销售额趋势'">📊 各月销售额趋势（出图）</button>
-                <button @click="aiInput = '数据里有没有异常？'">数据里有没有异常？</button>
-              </div>
-              <div class="chat-msg" :class="m.role" v-for="(m, i) in aiMessages" :key="i">
-                <div class="who">{{ m.role === 'user' ? '我' : 'AI 助手' }}</div>
-                <div class="bubble">
-                  <template v-for="(seg, j) in parseMsg(m.content)" :key="j">
-                    <pre v-if="seg.code">{{ seg.text }}</pre>
-                    <template v-else>{{ seg.text }}</template>
-                  </template>
-                </div>
-                <button v-if="m.role === 'assistant' && msgHasCode(m)" class="btn sm" style="margin-top:5px" @click="useAiCode(m)">▶ 放入 Python 变换</button>
-              </div>
-            </div>
-            <div class="chat-input">
-              <textarea v-model="aiInput" rows="1" @input="autoGrow" @keydown.enter.exact.prevent="sendAi" placeholder="问点什么…（Enter 发送）"></textarea>
-              <button class="send-btn" :class="{ready: aiInput.trim()}" @click="sendAi" :disabled="busy || !aiInput.trim()" title="发送">↑</button>
-            </div>
-            <div class="chat-quick">
-              <button @click="askAiInsight" :disabled="busy">💡 解读洞察</button>
-              <button @click="askAiChart" :disabled="busy || !aiInput.trim()" title="把输入框内容转为图表">📊 描述出图</button>
-            </div>
-          </template>
-
-          <!-- 未配置 -->
-          <template v-else>
-            <div class="chat-welcome" style="margin-top:4px">
-              <div class="chat-welcome-icon">🤖</div>
-              <b>接入大模型，让分析更快</b>
-              <span>自然语言提问、一句话出图、AI 解读洞察。<br>兼容智谱 GLM / DeepSeek / OpenAI。</span>
-              <button @click="aiView = 'settings'">⚙️ 开始配置</button>
-            </div>
-          </template>
-        </div>
-      </div>
-
       <!-- 操作历史 -->
       <div class="dock-sec">
         <div class="dock-sec-head" @click="openSec.hist = !openSec.hist">
@@ -1204,6 +1181,30 @@
     <button @click="colMenu.show = false">取消</button>
   </div>
 
+  <!-- AI 连接设置弹窗 -->
+  <div class="modal-mask" v-if="aiSettingsOpen" @click.self="aiSettingsOpen = false">
+    <div class="modal" style="width:min(480px, 92vw)">
+      <div class="modal-head"><b>🤖 AI 连接设置</b><button class="card-close" style="font-size:18px" @click="aiSettingsOpen = false">✕</button></div>
+      <div class="modal-body">
+        <div class="hint" style="margin-bottom:12px">兼容 OpenAI 风格接口（智谱 GLM / DeepSeek / OpenAI 等）。<b>API Key 仅保存在本机</b>，请求直接从你的电脑发出。</div>
+        <div class="field"><label>API Base URL</label>
+          <input type="text" v-model="aiSettings.base_url" placeholder="https://open.bigmodel.cn/api/paas/v4">
+        </div>
+        <div class="field"><label>模型名称</label>
+          <input type="text" v-model="aiSettings.model" placeholder="glm-4.5-flash">
+        </div>
+        <div class="field"><label>API Key</label>
+          <input type="password" v-model="aiSettings.api_key" placeholder="sk-...">
+        </div>
+        <div class="hint" v-if="aiConfigured" style="color:var(--green)">● 当前已连接：<b>{{ aiSettings.model }}</b></div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" @click="aiSettingsOpen = false">取消</button>
+        <button class="btn primary" @click="saveAiSettings" :disabled="busy">保存并连接</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 粘贴导入弹窗 -->
   <div class="modal-mask" v-if="pasteOpen" @click.self="pasteOpen = false">
     <div class="modal">
@@ -1228,8 +1229,8 @@
   </div>
 </div>
 
-<script src="/vendor/echarts.min.js?v=320"></script>
-<script src="/vendor/vue.global.prod.js?v=320"></script>
-<script src="/js/app.js?v=320"></script>
+<script src="/vendor/echarts.min.js?v=330"></script>
+<script src="/vendor/vue.global.prod.js?v=330"></script>
+<script src="/js/app.js?v=330"></script>
 </body>
 </html>

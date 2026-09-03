@@ -113,7 +113,9 @@ const app = createApp({
         { name: "查看统计信息", code: "print(df.describe())\nprint(df['地区'].value_counts())" },
       ],
 
-      // AI
+      // 主视图：data / ai
+      mainView: "data",
+      aiSettingsOpen: false,
       aiView: "chat",
       dsSearch: "",
       aiSettings: { api_key: "", base_url: "", model: "" },
@@ -253,6 +255,7 @@ const app = createApp({
     },
 
     goHome() {
+      this.mainView = "data";
       this.currentId = null;
       this.meta = {};
       this.previewOpen = true;
@@ -660,6 +663,7 @@ const app = createApp({
     },
 
     async selectDataset(id) {
+      this.mainView = "data";
       if (this.currentId === id) return;
       this.currentId = id;
       this.meta = this.datasets.find((d) => d.id === id) || {};
@@ -1308,7 +1312,7 @@ const app = createApp({
       try {
         const s = await this.api("PUT", "/api/ai/settings", this.aiSettings);
         this.aiConfigured = !!(s.api_key && s.base_url && s.model);
-        if (this.aiConfigured) this.aiView = "chat";
+        this.aiSettingsOpen = false;
         this.toast(this.aiConfigured ? "已连接，可以开始提问了" : "已保存（填全 Key / 地址 / 模型后启用）");
       } catch (e) { this.toast(e.message, "error"); }
     },
@@ -1342,6 +1346,11 @@ const app = createApp({
       } catch (e) {
         this.aiMessages.push({ role: "assistant", content: "⚠ " + e.message });
       } finally { this.busy = false; this.scrollChat(); }
+    },
+
+    askSuggest(q) {
+      this.aiInput = q;
+      this.sendAi();
     },
 
     scrollChat() {
