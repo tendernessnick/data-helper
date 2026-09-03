@@ -2,7 +2,7 @@
 
 一个本地运行的轻量数据分析工作台：导入数据 → 一键洞察 → 清洗/列变换 → SQL / 统计 / 时序 / 业务模板分析 → 可视化 → Python 变换 → 导出与 HTML 报告。面向商业/业务数据，**所有数据处理都在本机完成，数据不出本机**。
 
-![技术栈](https://img.shields.io/badge/Python-3.12%2B-blue) ![后端](https://img.shields.io/badge/FastAPI%20%2B%20DuckDB%20%2B%20SciPy-uvicorn-green) ![前端](https://img.shields.io/badge/Vue3%20%2B%20ECharts-无构建-orange) ![主题](https://img.shields.io/badge/主题-明%20%2F%20暗-blueviolet)
+![技术栈](https://img.shields.io/badge/Python-3.12%2B-blue) ![后端](https://img.shields.io/badge/FastAPI%20%2B%20DuckDB%20%2B%20SciPy-uvicorn-green) ![前端](https://img.shields.io/badge/Vue3%20%2B%20ECharts-无构建-orange) ![设计](https://img.shields.io/badge/设计语言-Apple%20HIG-9cf) ![主题](https://img.shields.io/badge/主题-明%20%2F%20暗-blueviolet)
 
 ---
 
@@ -44,7 +44,7 @@
 | 模块 | 能力 |
 |---|---|
 | 📥 数据导入 | CSV / XLSX / JSON / **直接粘贴**（Excel 复制即用）；自动识别中文编码与分隔符；**Excel 多工作表**一键导入；示例数据生成 |
-| 🔍 一键洞察 | **纯本地规则引擎**：数据质量体检（重复/缺失/常量列/疑似数值列）、数值列分布形态与离群值、类别集中度、时间范围与月度趋势、最大环比突变、强相关列对 → 中文要点清单 |
+| 🔍 一键洞察 | **数据质量评分（0-100 环形进度 + 扣分明细）** + 纯本地规则引擎：数据质量体检（重复/缺失/常量列/疑似数值列）、数值列分布形态与离群值、类别集中度、时间范围与月度趋势、最大环比突变、强相关列对 → 中文要点清单 |
 | 🧹 清洗与列变换 | 行级：去重、缺失值 6 种处理、12 种条件筛选、**异常值剔除**；列级：重命名、类型转换、**分箱（等宽/等频+自定义标签）、独热编码、Z-score/Min-Max 标准化、对数变换、日期成分提取（年月日/季度/星期/小时）、正则提取新列**；一级撤销 + 回滚原始 + 操作历史 |
 | 📈 统计分析 | 分组聚合（10 种函数）、透视表、**相关性（Pearson/Spearman/Kendall 三方法卡片内切换）**、直方图、箱线图、频次统计、describe 汇总 |
 | 📉 时间序列与预测 | 趋势、**同比/环比/累计**、移动平均、**🔮 预测**（线性趋势/指数平滑/季节朴素三法留出回测 MAPE 自动选优 + 95% 置信区间带状图） |
@@ -57,7 +57,7 @@
 | 📄 HTML 报告 | 一键生成**自包含 HTML 分析报告**（内嵌图表与洞察全文，离线可看、可直接发同事） |
 | 🎯 图表推荐 | 根据列类型组合自动推荐 10 种以内可视化（Tableau "Show Me" 思路），一键生成结果卡片 |
 | 🖱️ 列头快捷菜单 | 预览表格点任意列名 → 该列画像 / 填充到清洗筛选 / SQL 预览此列 |
-| 🤖 AI 问答（可选） | 配置 OpenAI 兼容接口（智谱 GLM / DeepSeek / OpenAI 等）后自然语言提问；「让 AI 解读洞察结果」；模型给的 pandas 代码经你确认才执行 |
+| 🤖 AI 问答（可选） | 配置 OpenAI 兼容接口（智谱 GLM / DeepSeek / OpenAI 等）后：自然语言提问；**📊 按描述出图**（说「各月销售额趋势」直接生成图表卡）；「AI 解读洞察」；模型给的 pandas 代码经你确认才执行 |
 
 ## 🤖 AI 配置（可选）
 
@@ -76,7 +76,7 @@ python -m venv .venv
 # 2b. 或开发模式
 .venv\Scripts\python -m uvicorn backend.app.main:app --port 8765 --reload
 
-# 3. 运行测试（84 项）
+# 3. 运行测试（87 项）
 .venv\Scripts\python -m pytest tests/ -q
 ```
 
@@ -113,7 +113,7 @@ data_helper/
 │   ├── sample.py         # 示例数据生成
 │   └── paths.py          # 路径（开发/exe 双模式）
 ├── frontend/             # 无构建前端（Vue3 + ECharts 本地 vendor，明暗双主题）
-├── tests/                # pytest 测试（84 项）
+├── tests/                # pytest 测试（87 项）
 ├── run_app.py            # 启动入口
 ├── requirements.txt      # 运行依赖（含 scipy / duckdb）
 └── requirements-dev.txt  # 开发依赖（含 pytest / pyinstaller）
@@ -129,8 +129,12 @@ data_helper/
 
 ## 🧪 测试
 
-84 项 pytest 覆盖：上传解析（含 GBK/JSON/XLSX/单列/分页/粘贴/多 sheet）、数据集管理（撤销/回滚）、14 种清洗与列变换、13 种分析、统计检验（4 类）、预测（趋势/数据不足路径）、SQL（正常/拒绝变更/建集）、深度画像（三方法相关/缺失矩阵/重复/交互）、对比/采样/图表推荐、导出、AI 模块、洞察规则与 HTML 报告。前端工作台已通过浏览器 GUI 全流程实测（明/暗主题）。
+87 项 pytest 覆盖：上传解析（含 GBK/JSON/XLSX/单列/分页/粘贴/多 sheet）、数据集管理（撤销/回滚）、14 种清洗与列变换、13 种分析、统计检验（4 类）、预测（趋势/数据不足路径）、SQL（正常/拒绝变更/建集）、深度画像（三方法相关/缺失矩阵/重复/交互）、对比/采样/图表推荐、导出、AI 模块、洞察规则与 HTML 报告。前端工作台已通过浏览器 GUI 全流程实测（明/暗主题）。
 
-## 🙏 设计参考
+## 🎨 设计语言
 
-功能与界面思路参考了这些优秀项目：[ydata-profiling](https://github.com/ydataai/ydata-profiling)（自动化画像与告警）、[DuckDB SQL on Pandas](https://duckdb.org/docs/lts/guides/python/sql_on_pandas.html)（DataFrame 上的 SQL）、[Tableau Workspace](https://help.tableau.com/current/pro/desktop/en-us/environment_workspace.htm)（数据栏/画布/属性栏三栏范式）、[Hex](https://learn.hex.tech/docs/explore-data/projects/projects-introduction)（卡片式分析画布）、[Material Dark Theme](https://m2.material.io/design/color/dark-theme.html)（暗色主题规范）。
+界面遵循 [Apple Human Interface Guidelines](https://developer.apple.com/design/human-interface-guidelines)：清晰、遵从内容、深度三原则——毛玻璃材质（backdrop blur + 饱和度提升）、系统色板（亮 #007AFF / 暗 #0A84FF 系）、#f5f5f7 / #161617 灰阶层次、大标题、胶囊按钮与分段控件、连续大圆角、8pt 间距网格、柔和多层阴影与微交互动效。
+
+## 🙏 功能与思路参考
+
+[ydata-profiling](https://github.com/ydataai/ydata-profiling)（自动化画像与告警）、[DuckDB SQL on Pandas](https://duckdb.org/docs/lts/guides/python/sql_on_pandas.html)（DataFrame 上的 SQL）、[Tableau Workspace](https://help.tableau.com/current/pro/desktop/en-us/environment_workspace.htm)（数据栏/画布/属性栏三栏范式与 Show Me 推荐）、[Hex](https://learn.hex.tech/docs/explore-data/projects/projects-introduction)（卡片式分析画布）。
