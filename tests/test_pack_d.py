@@ -58,7 +58,7 @@ def test_insights_empty_quality_ok():
     r = client.post("/api/upload", files={"file": ("t.csv", df.to_csv(index=False).encode(), "text/csv")}, data={"name": ""})
     ds = r.json()["id"]
     body = client.get(f"/api/datasets/{ds}/insights").json()
-    assert any("质量良好" in a for a in body["alerts"])
+    assert any("未发现明显数据质量问题" in a for a in body["alerts"])
 
 
 def test_report_html():
