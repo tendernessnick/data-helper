@@ -643,6 +643,8 @@ def datafeed_fetch(body: FeedBody):
             name = f"股票{body.symbol}"
     except datafeed.FeedError as e:
         raise HTTPException(400, str(e))
+    except Exception as e:  # 打包环境缺模块等未知错误 → 友好暴露而非 500
+        raise HTTPException(400, f"行情获取异常：{type(e).__name__}: {str(e)[:150]}")
     ds_id = storage.create_dataset(name, df, f"{name}.csv", df.to_csv(index=False).encode("utf-8-sig"))
     return {"id": ds_id, "meta": storage.get_meta(ds_id)}
 

@@ -54,6 +54,8 @@
 | ⚖️ 对比与采样 | **数据集对比**（列增删/类型变化/数值统计差异/键匹配）+ **采样**（随机/分层/前 N → 新数据集） |
 | 🐍 Python 变换 | 直接写 pandas 代码处理数据（内置 pd / np），先预览后应用，30 秒超时保护 |
 | 📤 导出 | 数据集与任意结果卡片导出 CSV / Excel（UTF-8 BOM） |
+| 📡 在线行情 | **akshare 开源数据库**（东方财富主源+新浪自动降级）：A 股个股（日/周/月线，前/后复权）与常用指数（上证/深证/创业板/沪深300/中证500/1000）一键拉取建数据集；含离线示例股票数据生成 |
+| 💰 金融分析 | **行情列智能识别**（中英文）→ 收益与风险指标（年化收益/波动/最大回撤/Sharpe/Sortino/Calmar/VaR/CVaR + 累计收益曲线）；**K线图**（candlestick+MA5/10/20/60+成交量+缩放）；**8 类技术指标**生成新列（MA/EMA/MACD/RSI/BOLL/KDJ/ATR/OBV）；**CAPM 基准对比**（Beta/Alpha/跟踪误差/信息比率+回归散点）；**投资组合**（2~5 资产有效前沿+最小方差/最大Sharpe点+相关矩阵）；**ADF 平稳性**与 **Ljung-Box 自相关**检验 |
 | 📄 HTML 报告 | 一键生成**自包含 HTML 分析报告**（内嵌图表与洞察全文，离线可看、可直接发同事） |
 | 🎯 图表推荐 | 根据列类型组合自动推荐 10 种以内可视化（Tableau "Show Me" 思路），一键生成结果卡片 |
 | 🖱️ 列头快捷菜单 | 预览表格点任意列名 → 该列画像 / 填充到清洗筛选 / SQL 预览此列 |
@@ -76,23 +78,25 @@ python -m venv .venv
 # 2b. 或开发模式
 .venv\Scripts\python -m uvicorn backend.app.main:app --port 8765 --reload
 
-# 3. 运行测试（87 项）
+# 3. 运行测试（104 项）
 .venv\Scripts\python -m pytest tests/ -q
 ```
 
 ## 📦 构建 exe
 
 ```bash
-.venv\Scripts\python -m PyInstaller --noconfirm --onefile --name "数据分析小助手" --add-data "frontend;frontend" run_app.py
+.venv\Scripts\python -m PyInstaller --noconfirm --onefile --name "数据分析小助手" --add-data "frontend;frontend" --collect-submodules akshare --collect-data akshare --collect-data py_mini_racer run_app.py
 ```
 
-产物在 `dist/数据分析小助手.exe`（约 84 MB，含 scipy/duckdb/pandas）。构建环境：Python 3.14 + PyInstaller 6.x（已在 Windows 10/11 验证）。
+产物在 `dist/数据分析小助手.exe`（约 103 MB，含 scipy/duckdb/akshare）。注意 `--collect-data` 两个参数不可省：akshare 需要内置日历数据文件，py_mini_racer 需要内置原生库，缺了会导致在线行情在 exe 中不可用。构建环境：Python 3.14 + PyInstaller 6.x（已在 Windows 10/11 验证）。
 
 ## 📁 目录结构
 
 ```
 data_helper/
 ├── backend/app/          # FastAPI 后端
+│   ├── finance.py        # 金融核心（收益风险/技术指标/K线/CAPM/组合/ADF/LB）
+│   ├── datafeed.py       # akshare 在线行情（东财+新浪双源降级）
 │   ├── main.py           # 应用入口（路由 + 静态托管）
 │   ├── api.py            # 全部 HTTP 路由
 │   ├── storage.py        # 数据集存储（原始文件 + 工作副本 + 撤销快照）
@@ -113,7 +117,7 @@ data_helper/
 │   ├── sample.py         # 示例数据生成
 │   └── paths.py          # 路径（开发/exe 双模式）
 ├── frontend/             # 无构建前端（Vue3 + ECharts 本地 vendor，明暗双主题）
-├── tests/                # pytest 测试（87 项）
+├── tests/                # pytest 测试（104 项）
 ├── run_app.py            # 启动入口
 ├── requirements.txt      # 运行依赖（含 scipy / duckdb）
 └── requirements-dev.txt  # 开发依赖（含 pytest / pyinstaller）
@@ -129,7 +133,7 @@ data_helper/
 
 ## 🧪 测试
 
-87 项 pytest 覆盖：上传解析（含 GBK/JSON/XLSX/单列/分页/粘贴/多 sheet）、数据集管理（撤销/回滚）、14 种清洗与列变换、13 种分析、统计检验（4 类）、预测（趋势/数据不足路径）、SQL（正常/拒绝变更/建集）、深度画像（三方法相关/缺失矩阵/重复/交互）、对比/采样/图表推荐、导出、AI 模块、洞察规则与 HTML 报告。前端工作台已通过浏览器 GUI 全流程实测（明/暗主题）。
+104 项 pytest 覆盖：上传解析（含 GBK/JSON/XLSX/单列/分页/粘贴/多 sheet）、数据集管理（撤销/回滚）、14 种清洗与列变换、13 种分析、统计检验（4 类）、预测（趋势/数据不足路径）、SQL（正常/拒绝变更/建集）、深度画像（三方法相关/缺失矩阵/重复/交互）、对比/采样/图表推荐、导出、AI 模块、洞察规则与 HTML 报告。前端工作台已通过浏览器 GUI 全流程实测（明/暗主题）。
 
 ## 🎨 设计语言
 
