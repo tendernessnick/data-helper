@@ -7,12 +7,18 @@ from pydantic import BaseModel
 from . import analysis
 from . import ai
 from . import cleaning
+from . import compare as compare_mod
+from . import deepprofile
 from . import exporter
+from . import forecast as forecast_mod
 from . import insights as insights_mod
 from . import profile as prof
 from . import report as report_mod
 from . import sample as sample_mod
+from . import sqlquery
+from . import stats_tests
 from . import storage
+from . import suggest as suggest_mod
 from . import transform
 from .serialize import rows_payload
 from .storage import DatasetNotFound
@@ -238,6 +244,171 @@ def make_report(ds_id: str):
     df = _load(ds_id)
     path = report_mod.save_report(storage.get_meta(ds_id), df)
     return FileResponse(path, filename=path.name, media_type="text/html")
+
+
+# ---------- SQL 控制台（DuckDB） ----------
+
+
+@router.get("/sql/tables")
+def sql_tables():
+    """返回全部数据集的 SQL 表别名（ds1/ds2...）。"""
+    metas = storage.list_datasets()
+    return [{"alias": f"ds{i}", "id": m["id"], "name": m["name"], "rows": m["rows"]}
+            for i, m in enumerate(metas, start=1)]
+
+
+class SqlBody(BaseModel):
+    query: str
+    save_as: str = ""
+    current_id: str = ""  # 注册为 df 的数据集；留空取最新更新的数据集
+
+
+@router.post("/sql")
+def run_sql(body: SqlBody):
+    metas = storage.list_datasets()
+    if body.current_id and not any(m["id"] == body.current_id for m in metas):
+        raise HTTPException(404, "当前数据集不存在或已删除")
+    items = [{"id": m["id"], "name": m["name"], "df": storage.load_df(m["id"])} for m in metas]
+    current = body.current_id or (metas[0]["id"] if metas else "")
+    try:
+        result = sqlquery.run_sql(body.query, items, current_id=current)
+    except sqlquery.SqlError as e:
+        raise HTTPException(400, str(e))
+
+    payload = {k: v for k, v in result.items() if k != "df"}
+    if body.save_as:
+        ds_id = storage.create_dataset(body.save_as, result["df"], "SQL查询结果.csv",
+                                       result["df"].to_csv(index=False).encode("utf-8-sig"))
+        storage.save_df(ds_id, result["df"], "SQL建集",
+                        f"{body.query.strip().splitlines()[0][:60]}...（{len(result['df'])} 行）")
+        payload["new_dataset"] = {"id": ds_id, "meta": storage.get_meta(ds_id)}
+    return payload
+
+
+# ---------- 深度画像 ----------
+
+
+@router.get("/datasets/{ds_id}/corr")
+def corr_deep(ds_id: str, method: str = Query("pearson")):
+    df = _load(ds_id)
+    try:
+        return deepprofile.corr_matrix(df, method)
+    except analysis.AnalysisError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.get("/datasets/{ds_id}/missing-matrix")
+def missing_matrix(ds_id: str):
+    df = _load(ds_id)
+    try:
+        return deepprofile.missing_matrix(df)
+    except analysis.AnalysisError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.get("/datasets/{ds_id}/duplicates")
+def duplicates(ds_id: str):
+    df = _load(ds_id)
+    return deepprofile.duplicates_detail(df)
+
+
+@router.get("/datasets/{ds_id}/interactions")
+def interactions(ds_id: str, x: str = Query(...), y: str = Query(...)):
+    df = _load(ds_id)
+    try:
+        return deepprofile.interactions(df, x, y)
+    except analysis.AnalysisError as e:
+        raise HTTPException(400, str(e))
+
+
+# ---------- 统计检验 ----------
+
+
+class TestBody(BaseModel):
+    test: str
+    params: dict = {}
+
+
+@router.post("/datasets/{ds_id}/test")
+def run_test(ds_id: str, body: TestBody):
+    df = _load(ds_id)
+    try:
+        return stats_tests.run_test(df, body.test, body.params)
+    except stats_tests.TestError as e:
+        raise HTTPException(400, str(e))
+
+
+# ---------- 预测 ----------
+
+
+class ForecastBody(BaseModel):
+    params: dict = {}
+
+
+@router.post("/datasets/{ds_id}/forecast")
+def forecast(ds_id: str, body: ForecastBody):
+    df = _load(ds_id)
+    try:
+        return forecast_mod.forecast(df, body.params)
+    except analysis.AnalysisError as e:
+        raise HTTPException(400, str(e))
+
+
+# ---------- 交叉热力 / 对比 / 采样 / 图表推荐 ----------
+
+
+@router.post("/datasets/{ds_id}/cross-heat")
+def cross_heat(ds_id: str, body: ForecastBody):
+
+    df = _load(ds_id)
+    try:
+        return suggest_mod.cross_heat(df, body.params)
+    except analysis.AnalysisError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.get("/datasets/{ds_id}/chart-suggest")
+def chart_suggest(ds_id: str):
+    df = _load(ds_id)
+    return suggest_mod.suggest(df)
+
+
+class CompareBody(BaseModel):
+    other_id: str
+    key: str = ""
+
+
+@router.post("/datasets/{ds_id}/compare")
+def compare(ds_id: str, body: CompareBody):
+    _meta_or_404(body.other_id)
+    try:
+        return compare_mod.compare(
+            _load(ds_id), _load(body.other_id),
+            storage.get_meta(ds_id)["name"], storage.get_meta(body.other_id)["name"],
+            body.key,
+        )
+    except analysis.AnalysisError as e:
+        raise HTTPException(400, str(e))
+
+
+class SampleBody(BaseModel):
+    method: str = "random"
+    n: int = 100
+    by: str = ""
+    name: str = ""
+
+
+@router.post("/datasets/{ds_id}/sample-create")
+def sample_create(ds_id: str, body: SampleBody):
+    _meta_or_404(ds_id)
+    try:
+        out = compare_mod.sample_create(_load(ds_id), body.method, body.n, body.by)
+    except analysis.AnalysisError as e:
+        raise HTTPException(400, str(e))
+    name = body.name or f"{storage.get_meta(ds_id)['name']}-采样"
+    ds_id2 = storage.create_dataset(name, out, "采样数据.csv", out.to_csv(index=False).encode("utf-8-sig"))
+    return {"id": ds_id2, "meta": storage.get_meta(ds_id2)}
+
 
 
 # ---------- 导出 ----------
