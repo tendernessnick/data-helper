@@ -93,12 +93,12 @@ def _parse_json(raw: bytes) -> pd.DataFrame:
     raise ValueError("JSON 顶层必须是数组或对象")
 
 
-def parse_upload(filename: str, raw: bytes) -> pd.DataFrame:
+def parse_upload(filename: str, raw: bytes, sheet_name=None) -> pd.DataFrame:
     ext = Path(filename or "").suffix.lower()
     if ext in (".csv", ".txt"):
         df = read_csv_any(raw)
     elif ext == ".xlsx":
-        df = pd.read_excel(io.BytesIO(raw), sheet_name=0)
+        df = pd.read_excel(io.BytesIO(raw), sheet_name=sheet_name if sheet_name is not None else 0)
     elif ext == ".json":
         df = _parse_json(raw)
     else:
@@ -119,6 +119,7 @@ def create_dataset(name, df: pd.DataFrame, original_filename: str, original_byte
         ext = Path(original_filename or "").suffix.lower() or ".bin"
         (d / f"original{ext}").write_bytes(original_bytes)
         df.to_pickle(d / "current.pkl")
+        sheets = _xlsx_sheets(original_bytes) if ext == ".xlsx" else None
         meta = {
             "id": ds_id,
             "name": (name or "").strip() or Path(original_filename or "").stem or "未命名数据集",
@@ -128,6 +129,7 @@ def create_dataset(name, df: pd.DataFrame, original_filename: str, original_byte
             "rows": int(len(df)),
             "cols": int(df.shape[1]),
             "columns": _columns_info(df),
+            "sheets": sheets or [],
             "history": [
                 {
                     "time": _now(),
@@ -138,6 +140,19 @@ def create_dataset(name, df: pd.DataFrame, original_filename: str, original_byte
         }
         _write_meta(d, meta)
     return ds_id
+
+
+def _xlsx_sheets(raw: bytes):
+    try:
+        from openpyxl import load_workbook
+
+        wb = load_workbook(io.BytesIO(raw), read_only=True, keep_links=False)
+        try:
+            return list(wb.sheetnames)
+        finally:
+            wb.close()
+    except Exception:
+        return None
 
 
 def list_datasets() -> list:
@@ -168,7 +183,12 @@ def load_df(ds_id: str) -> pd.DataFrame:
 def save_df(ds_id: str, df: pd.DataFrame, action: str, detail: str = "") -> dict:
     with _lock:
         d = _ds_dir(ds_id)
-        df.to_pickle(d / "current.pkl")
+        cur = d / "current.pkl"
+        if cur.exists():
+            import shutil
+
+            shutil.copy2(cur, d / "prev.pkl")  # 撤销快照：只保留最近一步
+        df.to_pickle(cur)
         meta = _read_meta(d)
         meta["rows"] = int(len(df))
         meta["cols"] = int(df.shape[1])
@@ -176,6 +196,35 @@ def save_df(ds_id: str, df: pd.DataFrame, action: str, detail: str = "") -> dict
         meta["updated_at"] = _now()
         meta["history"].append({"time": _now(), "action": action, "detail": detail})
         meta["history"] = meta["history"][-MAX_HISTORY:]
+        _write_meta(d, meta)
+        return meta
+
+
+def undo_dataset(ds_id: str) -> dict:
+    """撤销最近一次修改（清洗/变换/回滚），恢复到上一步的数据。"""
+    with _lock:
+        d = _ds_dir(ds_id)
+        prev = d / "prev.pkl"
+        if not prev.exists():
+            raise DatasetNotFound(f"{ds_id}:no-undo")
+        import shutil
+
+        shutil.copy2(prev, d / "current.pkl")
+        prev.unlink()
+        df = pd.read_pickle(d / "current.pkl")
+        meta = _read_meta(d)
+        undone = meta["history"].pop() if len(meta["history"]) > 1 else None
+        meta["rows"] = int(len(df))
+        meta["cols"] = int(df.shape[1])
+        meta["columns"] = _columns_info(df)
+        meta["updated_at"] = _now()
+        meta["history"].append(
+            {
+                "time": _now(),
+                "action": "撤销",
+                "detail": f"撤销了「{(undone or {}).get('action', '上一步')}」",
+            }
+        )
         _write_meta(d, meta)
         return meta
 
@@ -206,6 +255,26 @@ def reset_dataset(ds_id: str) -> dict:
         p = originals[0]
         df = parse_upload(p.name, p.read_bytes())
         return save_df(ds_id, df, "回滚", "恢复到上传时的原始数据")
+
+
+def import_sheet(ds_id: str, sheet_name: str) -> str:
+    """从原始 xlsx 的其他工作表导入为新数据集。"""
+    with _lock:
+        d = _ds_dir(ds_id)
+        originals = [p for p in d.glob("original.xlsx")]
+        if not originals:
+            raise DatasetNotFound(f"{ds_id}:not-xlsx")
+        p = originals[0]
+        sheets = _xlsx_sheets(p.read_bytes()) or []
+        if sheet_name not in sheets:
+            raise DatasetNotFound(f"{ds_id}:sheet-missing:{sheet_name}")
+        df = parse_upload(p.name, p.read_bytes(), sheet_name=sheet_name)
+        if df.empty:
+            raise ValueError(f"工作表 [{sheet_name}] 没有数据")
+        meta = _read_meta(d)
+        return create_dataset(
+            f"{meta['name']}-{sheet_name}", df, f"{meta.get('original_filename', 'data.xlsx')}#{sheet_name}", p.read_bytes()
+        )
 
 
 def find_original_file(ds_id: str) -> Path:

@@ -36,17 +36,40 @@ def _meta_or_404(ds_id: str) -> dict:
 
 
 @router.post("/upload")
-async def upload(file: UploadFile = File(...), name: str = Form(None)):
+async def upload(file: UploadFile = File(...), name: str = Form(None), sheet: str = Form(None)):
     raw = await file.read()
     if not raw:
         raise HTTPException(400, "上传的文件为空")
     try:
-        df = storage.parse_upload(file.filename or "", raw)
+        df = storage.parse_upload(file.filename or "", raw, sheet_name=sheet)
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:  # 解析器抛出的其他异常（结构错误等）
         raise HTTPException(400, f"文件解析失败：{e}")
     ds_id = storage.create_dataset(name, df, file.filename or "data.csv", raw)
+    return {"id": ds_id, "meta": storage.get_meta(ds_id)}
+
+
+class PasteBody(BaseModel):
+    text: str
+    name: str = ""
+
+
+@router.post("/upload-paste")
+def upload_paste(body: PasteBody):
+    text = (body.text or "").lstrip("\ufeff").strip()
+    if not text:
+        raise HTTPException(400, "粘贴内容为空")
+    # Excel 复制默认 Tab 分隔；统一转成 CSV 文本走既有解析
+    first_line = text.splitlines()[0]
+    if "\t" in first_line and "," not in first_line:
+        text = text.replace("\t", ",")
+    raw = text.encode("utf-8-sig")
+    try:
+        df = storage.parse_upload("paste.csv", raw)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    ds_id = storage.create_dataset(body.name or "粘贴数据", df, "粘贴数据.csv", raw)
     return {"id": ds_id, "meta": storage.get_meta(ds_id)}
 
 
@@ -89,6 +112,31 @@ def remove(ds_id: str):
 def reset(ds_id: str):
     _meta_or_404(ds_id)
     return storage.reset_dataset(ds_id)
+
+
+@router.post("/datasets/{ds_id}/undo")
+def undo(ds_id: str):
+    _meta_or_404(ds_id)
+    try:
+        return storage.undo_dataset(ds_id)
+    except DatasetNotFound:
+        raise HTTPException(400, "没有可撤销的操作（仅支持撤销最近一次清洗/变换/回滚）")
+
+
+class ImportSheetBody(BaseModel):
+    sheet: str
+
+
+@router.post("/datasets/{ds_id}/import-sheet")
+def import_sheet(ds_id: str, body: ImportSheetBody):
+    _meta_or_404(ds_id)
+    try:
+        ds_id2 = storage.import_sheet(ds_id, body.sheet)
+    except DatasetNotFound:
+        raise HTTPException(400, f"工作表 [{body.sheet}] 不存在或源文件不是 xlsx")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"id": ds_id2, "meta": storage.get_meta(ds_id2)}
 
 
 # ---------- 预览与画像 ----------
