@@ -114,7 +114,7 @@ def forecast(df: pd.DataFrame, params: dict) -> dict:
     else:
         future_idx = pd.date_range(series.index[-1] + pd.tseries.frequencies.to_offset(rule), periods=horizon, freq=rule)
 
-    history_rows = [[idx.strftime("%Y-%m-%d"), round(float(v), 4), None, False] for idx, v in series.items()]
+    history_rows = [[idx.strftime("%Y-%m-%d"), round(float(v), 4), None] for idx, v in series.items()]
     future_rows = [
         [
             idx.strftime("%Y-%m-%d"),
@@ -124,16 +124,14 @@ def forecast(df: pd.DataFrame, params: dict) -> dict:
                 "lower": round(float(max(v - 1.96 * resid_std, 0)), 4),
                 "upper": round(float(v + 1.96 * resid_std), 4),
             },
-            True,
         ]
         for idx, v in zip(future_idx, point)
     ]
     return {
         "columns": [
             {"name": "期间", "numeric": False},
-            {"name": f"实际值", "numeric": True},
+            {"name": "实际值", "numeric": True},
             {"name": f"预测值（{best_name}）", "numeric": True},
-            {"name": "is_forecast", "numeric": False, "hidden": True},
         ],
         "rows": history_rows + future_rows,
         "backtest": backtest,

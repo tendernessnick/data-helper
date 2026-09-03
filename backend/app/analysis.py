@@ -101,6 +101,9 @@ def pivot(df: pd.DataFrame, params: dict) -> dict:
 
 def corr(df: pd.DataFrame, params: dict) -> dict:
     cols = params.get("columns")
+    method = params.get("method", "pearson")
+    if method not in ("pearson", "spearman", "kendall"):
+        raise AnalysisError("method 仅支持 pearson / spearman / kendall")
     num = cols if cols else _num_cols(df)
     for c in num:
         _check(df, c)
@@ -108,14 +111,16 @@ def corr(df: pd.DataFrame, params: dict) -> dict:
             raise AnalysisError(f"列 [{c}] 不是数值列，无法计算相关性")
     if len(num) < 2:
         raise AnalysisError("至少需要两个数值列")
-    matrix = df[num].corr(numeric_only=True).round(4)
+    matrix = df[num].corr(method=method).round(4)
     table = _to_table(matrix)
-    table["note"] = "Pearson 相关系数矩阵（-1 ~ 1）"
+    table["note"] = {"pearson": "Pearson 相关系数矩阵（-1 ~ 1）", "spearman": "Spearman 秩相关矩阵（单调，抗离群）",
+                     "kendall": "Kendall Tau 秩相关矩阵（小样本稳健）"}[method]
     table["matrix"] = {
         "columns": list(matrix.columns),
         "values": [[None if pd.isna(v) else round(float(v), 4) for v in row]
                    for row in matrix.itertuples(index=False, name=None)],
     }
+    table["method"] = method
     return table
 
 

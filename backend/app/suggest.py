@@ -83,5 +83,8 @@ def cross_heat(df: pd.DataFrame, params: dict) -> dict:
         "rows": [[str(i)] + [int(v) for v in row] for row, i in zip(table.values, table.index)],
         "heatmap": {"rows": [str(i) for i in table.index], "cols": [str(c) for c in table.columns],
                      "values": table.values.tolist()},
+        "matrix": {"columns": [str(c) for c in table.columns],
+                    "values": [[int(v) for v in row] for row in table.values]},
+        "matrix_rows": [str(i) for i in table.index],
         "note": f"{row_c} × {col_c} 交叉计数热力图",
     }

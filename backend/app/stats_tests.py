@@ -58,8 +58,14 @@ def normality(df: pd.DataFrame, params: dict) -> dict:
         "tests": [
             {"name": "Jarque-Bera", "stat": round(float(jb_stat), 4), **_conclusion(jb_p)},
         ],
-        "desc": {"skew": round(float(s.skew()), 4), "kurt": round(float(s.kurt()), 4),
-                  "mean": round(float(s.mean()), 4), "std": round(float(s.std()), 4)},
+        "desc_columns": ["统计量", "值"],
+        "desc": [
+            ["样本数", int(len(s))],
+            ["均值", round(float(s.mean()), 4)],
+            ["标准差", round(float(s.std()), 4)],
+            ["偏度", round(float(s.skew()), 4)],
+            ["峰度", round(float(s.kurt()), 4)],
+        ],
         "note": "原假设：数据来自正态分布。p<0.05 表示明显偏离正态。",
     }
     if len(s) <= 5000:
