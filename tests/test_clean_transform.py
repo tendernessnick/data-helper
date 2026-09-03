@@ -174,3 +174,29 @@ def test_transform_non_dataframe():
     r = client.post(f"/api/datasets/{ds}/transform", json={"code": "df = 123", "apply": True})
     assert r.status_code == 400
     assert "DataFrame" in r.json()["detail"]
+
+
+def test_regression_cast_int_with_decimals():
+    """修复回归：小数浮点列转整数不再报错（四舍五入）。"""
+    r = client.post(
+        "/api/upload",
+        files={"file": ("dec.csv", "x\n1.5\n2.7\n3.2\n".encode("utf-8"), "text/csv")},
+        data={"name": ""},
+    )
+    ds = r.json()["id"]
+    rr = client.post(f"/api/datasets/{ds}/clean", json={"op": "cast_type", "params": {"column": "x", "to": "int"}})
+    assert rr.status_code == 200, rr.text
+    vals = [row[0] for row in client.get(f"/api/datasets/{ds}/rows").json()["rows"]]
+    assert vals == [2, 3, 3]
+
+
+def test_regression_stratified_keeps_group_column():
+    """修复回归：分层采样保留分层列。"""
+    csv = "g,v\n" + "\n".join(f"A,{i}" for i in range(10)) + "\n" + "\n".join(f"B,{i}" for i in range(10)) + "\n"
+    r = client.post("/api/upload", files={"file": ("s.csv", csv.encode(), "text/csv")}, data={"name": ""})
+    ds = r.json()["id"]
+    rr = client.post(f"/api/datasets/{ds}/clean", json={"op": "filter_rows", "params": {"column": "v", "op": "ge", "value": 0}})
+    rr2 = client.post(f"/api/datasets/{ds}/sample-create", json={"method": "stratified", "n": 2, "by": "g"})
+    assert rr2.status_code == 200
+    cols = [c["name"] for c in rr2.json()["meta"]["columns"]]
+    assert "g" in cols

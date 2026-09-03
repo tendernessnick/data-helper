@@ -29,6 +29,12 @@ def corr_matrix(df: pd.DataFrame, method: str = "pearson") -> dict:
         "columns": [str(c) for c in matrix.columns],
         "values": [[None if pd.isna(v) else round(float(v), 4) for v in row]
                    for row in matrix.itertuples(index=False, name=None)],
+        # 前端热力图渲染依赖 matrix 结构（与 analysis.corr 输出保持一致）
+        "matrix": {
+            "columns": [str(c) for c in matrix.columns],
+            "values": [[None if pd.isna(v) else round(float(v), 4) for v in row]
+                       for row in matrix.itertuples(index=False, name=None)],
+        },
         "note": {"pearson": "Pearson 线性相关", "spearman": "Spearman 秩相关（单调，抗离群）",
                   "kendall": "Kendall Tau 秩相关（小样本稳健）"}[method],
     }

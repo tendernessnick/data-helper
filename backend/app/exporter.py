@@ -30,6 +30,13 @@ def export_df(df: pd.DataFrame, filename: str, fmt: str) -> Path:
 
 
 def export_table(columns: list, rows: list, filename: str, fmt: str) -> Path:
-    """导出分析结果表（columns: [名称], rows: [[...]]）。"""
-    df = pd.DataFrame(rows, columns=[c["name"] if isinstance(c, dict) else c for c in columns])
+    """导出分析结果表（columns: [名称], rows: [[...]]）。dict 单元格（如预测区间）展平为可读文本。"""
+    flat = [
+        [
+            "{value}(下限{lower}~上限{upper})".format(**v) if isinstance(v, dict) and "value" in v else v
+            for v in row
+        ]
+        for row in rows
+    ]
+    df = pd.DataFrame(flat, columns=[c["name"] if isinstance(c, dict) else c for c in columns])
     return export_df(df, filename, fmt)

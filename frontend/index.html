@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>数据分析小助手</title>
-<link rel="stylesheet" href="/css/style.css?v=330">
+<link rel="stylesheet" href="/css/style.css?v=331">
 </head>
 <body>
 <div id="app" v-cloak>
@@ -183,7 +183,7 @@
                 <button v-for="ct in chartTypes" :key="ct.v" :class="{on: card.chartType === ct.v}"
                         @click="card.chartType = ct.v; renderCardChart(card)">{{ ct.l }}</button>
               </div>
-              <button class="btn sm ghost" v-if="card.type === 'corr'" @click="switchCorrMethod(card)" title="切换相关系数方法">{{ card.payload.method === 'pearson' ? 'Pearson' : card.payload.method === 'spearman' ? 'Spearman' : 'Kendall' }} ⟳</button>
+              <button class="btn sm ghost" v-if="card.payload.method" @click="switchCorrMethod(card)" title="切换相关系数方法">{{ card.payload.method === 'pearson' ? 'Pearson' : card.payload.method === 'spearman' ? 'Spearman' : 'Kendall' }} ⟳</button>
               <div class="card-order">
                 <button title="上移" :disabled="cardIdx === 0" @click="moveCard(cardIdx, -1)">▲</button>
                 <button title="下移" :disabled="cardIdx === cards.length - 1" @click="moveCard(cardIdx, 1)">▼</button>
@@ -251,6 +251,28 @@
                         <td class="num">{{ fmtCell(x.mean) }} / {{ fmtCell(x.median) }}</td>
                         <td>{{ x.shape }}</td>
                         <td class="num" :style="x.outliers ? 'color:var(--warn)' : ''">{{ x.outliers }}（{{ x.outlier_pct }}%）</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </template>
+              <div class="deep-links">
+                <button @click="loadDeep('missing')" :disabled="busy">🧭 缺失值矩阵</button>
+                <button @click="loadDeep('dup')" :disabled="busy">🔁 重复行明细</button>
+              </div>
+              <template v-if="card.deep === 'missing' && card.deepData">
+                <div class="ins-sec-title">🧭 缺失值矩阵（行分段 × 列）</div>
+                <div class="chart-box deep-chart" style="height:260px"></div>
+              </template>
+              <template v-if="card.deep === 'dup' && card.deepData">
+                <div class="ins-sec-title">🔁 重复行明细</div>
+                <div class="result-note" style="margin-bottom:6px">{{ card.deepData.note }}</div>
+                <div class="table-scroll" style="max-height:240px">
+                  <table class="data">
+                    <thead><tr><th v-for="c in card.deepData.columns" :key="c.name">{{ c.name }}</th></tr></thead>
+                    <tbody>
+                      <tr v-for="(r, i) in card.deepData.rows" :key="i">
+                        <td v-for="(v, j) in r" :key="j" :class="{null: v === null}">{{ fmtCell(v) }}</td>
                       </tr>
                     </tbody>
                   </table>
@@ -1229,8 +1251,8 @@
   </div>
 </div>
 
-<script src="/vendor/echarts.min.js?v=330"></script>
-<script src="/vendor/vue.global.prod.js?v=330"></script>
-<script src="/js/app.js?v=330"></script>
+<script src="/vendor/echarts.min.js?v=331"></script>
+<script src="/vendor/vue.global.prod.js?v=331"></script>
+<script src="/js/app.js?v=331"></script>
 </body>
 </html>

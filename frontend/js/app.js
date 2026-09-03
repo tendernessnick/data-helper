@@ -116,7 +116,6 @@ const app = createApp({
       // 主视图：data / ai
       mainView: "data",
       aiSettingsOpen: false,
-      aiView: "chat",
       dsSearch: "",
       aiSettings: { api_key: "", base_url: "", model: "" },
       aiConfigured: false,
@@ -258,6 +257,9 @@ const app = createApp({
       this.mainView = "data";
       this.currentId = null;
       this.meta = {};
+      this.cards = [];
+      Object.values(this._charts || {}).forEach((c) => c && c.dispose());
+      this._charts = {};
       this.previewOpen = true;
       this.page = 1;
       window.scrollTo(0, 0);
@@ -1210,6 +1212,43 @@ const app = createApp({
         const R = await this.api("GET", `/api/datasets/${this.currentId}/insights`);
         this.addCard({ type: "insight", icon: "🔍", title: "一键数据洞察", payload: R, span2: true });
         this.toast("洞察完成，详见画布卡片");
+      } catch (e) { this.toast(e.message, "error"); }
+      finally { this.busy = false; }
+    },
+
+    async loadDeep(kind) {
+      this.busy = true;
+      try {
+        const card = [...this.cards].reverse().find((c) => c.type === "insight");
+        if (!card) { this.toast("请先运行一键洞察", "error"); return; }
+        if (kind === "missing") {
+          card.deepData = await this.api("GET", `/api/datasets/${this.currentId}/missing-matrix`);
+          card.deep = "missing";
+          await this.$nextTick();
+          // 洞察卡 chartDiv=false，缺失矩阵热力图单独渲染到其深度容器
+          const el = document.querySelector('.card-item .deep-chart');
+          if (el) {
+            if (!this._charts) this._charts = {};
+            if (this._charts[card.id + ':deep']) this._charts[card.id + ':deep'].dispose();
+            const T = this.chartTheme();
+            const D = card.deepData;
+            const data = [];
+            D.values.forEach((row, i) => row.forEach((v, j) => data.push([j, i, v])));
+            const ch = echarts.init(el);
+            this._charts[card.id + ':deep'] = ch;
+            ch.setOption({
+              tooltip: { position: "top", formatter: (p2) => `${D.columns[p2.value[0]]} · ${D.row_labels[p2.value[1]]}: ${p2.value[2]}%` },
+              grid: { left: 80, bottom: 55, right: 15, top: 10 },
+              xAxis: { type: "category", data: D.columns, axisLabel: { rotate: 40, fontSize: 10, color: T.txt } },
+              yAxis: { type: "category", data: D.row_labels, axisLabel: { fontSize: 9, color: T.txt } },
+              visualMap: { min: 0, max: 100, orient: "horizontal", left: "center", bottom: 0, textStyle: { color: T.txt }, itemWidth: 12, inRange: { color: ["#ffffff", "#ff9500"] } },
+              series: [{ type: "heatmap", data }],
+            });
+          }
+        } else {
+          card.deepData = await this.api("GET", `/api/datasets/${this.currentId}/duplicates`);
+          card.deep = "dup";
+        }
       } catch (e) { this.toast(e.message, "error"); }
       finally { this.busy = false; }
     },

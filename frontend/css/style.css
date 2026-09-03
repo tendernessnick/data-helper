@@ -703,3 +703,13 @@ html[data-theme="dark"] .chat-msg.user .bubble { color: #fff; }
 .ai-composer .send-btn { width: 36px; height: 36px; font-size: 17px; }
 .ai-composer .chat-quick { margin-top: 8px; justify-content: center; }
 .ai-composer .chat-quick button { padding: 5px 14px; font-size: 12px; }
+
+/* 深度画像入口 */
+.deep-links { display: flex; gap: 8px; margin-top: 12px; }
+.deep-links button {
+  border: 1px solid var(--border); background: var(--card); color: var(--text-2);
+  font-size: 12px; font-weight: 500; font-family: inherit;
+  padding: 6px 13px; border-radius: 980px; cursor: pointer;
+  transition: all .18s var(--ease);
+}
+.deep-links button:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }

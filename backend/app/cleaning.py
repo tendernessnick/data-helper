@@ -90,7 +90,8 @@ def cast_type(df, params):
     out = df.copy()
     try:
         if to == "int":
-            out[column] = pd.to_numeric(df[column], errors="coerce").astype("Int64")
+            # 先数值化（无法解析→空），再四舍五入取整（小数 3.5→4），避免 pandas "cannot safely cast"
+            out[column] = pd.to_numeric(df[column], errors="coerce").round().astype("Int64")
         elif to == "float":
             out[column] = pd.to_numeric(df[column], errors="coerce").astype("float64")
         elif to == "str":

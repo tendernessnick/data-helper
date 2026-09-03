@@ -210,9 +210,9 @@ def growth(df: pd.DataFrame, params: dict) -> dict:
     agg = params.get("agg", "sum")
     series = _resample_series(df, date_col, value_col, freq, agg)
     freq_label = FREQ_LABEL.get(freq, freq)
-    mom = (series.pct_change() * 100).round(2)
+    mom = (series.pct_change() * 100).replace([np.inf, -np.inf], np.nan).round(2)
     yoy_periods = YOY_PERIODS.get(freq)
-    yoy = (series.pct_change(periods=yoy_periods) * 100).round(2) if yoy_periods else pd.Series([None] * len(series), index=series.index)
+    yoy = (series.pct_change(periods=yoy_periods) * 100).replace([np.inf, -np.inf], np.nan).round(2) if yoy_periods else pd.Series([None] * len(series), index=series.index)
     cum = series.cumsum().round(4)
     rows_out = []
     for idx, v in series.items():
@@ -234,7 +234,8 @@ def growth(df: pd.DataFrame, params: dict) -> dict:
             {"name": "累计值", "numeric": True},
         ],
         "rows": rows_out,
-        "note": f"{value_col} 按{freq_label}{agg}：环比/同比增长率与累计值（同比按{freq_label}对齐）",
+        "note": f"{value_col} 按{freq_label}{agg}：环比/同比增长率与累计值（同比按{freq_label}对齐）"
+                + ("；日频同比按 365 个期间对齐，交易日数据（不含周末）会出现漂移，建议用周/月粒度" if freq == "D" else ""),
         "chart": {"type": "line", "label_col": "期间"},
     }
 

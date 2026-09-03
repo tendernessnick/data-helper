@@ -89,7 +89,10 @@ def sample_create(df: pd.DataFrame, method: str, n: int, by: str = "", seed: int
             raise AnalysisError("分层采样需要指定分层列")
         if by not in df.columns:
             raise AnalysisError(f"列不存在: {by}")
-        groups = df.groupby(by, dropna=False)
-        out = groups.apply(lambda g: g.sample(n=min(n, len(g)), random_state=seed))
-        return out.reset_index(drop=True)
+        # 显式按组采样后拼接（不用 groupby.apply：pandas3 默认丢弃分组列）
+        picked = []
+        for _, g in df.groupby(by, dropna=False, sort=False):
+            picked.append(g.sample(n=min(n, len(g)), random_state=seed))
+        out = pd.concat(picked).reset_index(drop=True)
+        return out
     raise AnalysisError("method 仅支持 random / stratified / top")

@@ -80,10 +80,14 @@ def _max_drawdown(prices: pd.Series, dates: pd.Series):
     after = prices.iloc[trough_idx:]
     rec = after[after >= peak_val]
     rec_idx = int(rec.index[0]) if len(rec) else None
+    def _d(i):
+        d = dates.iloc[int(i)]
+        return "第{}期".format(int(i) + 1) if pd.isna(d) else str(d)[:10]
+
     return {
         "drawdown": round(dd_val, 6),
-        "peak_date": str(dates.iloc[peak_idx])[:10],
-        "trough_date": str(dates.iloc[trough_idx])[:10],
+        "peak_date": _d(peak_idx),
+        "trough_date": _d(trough_idx),
         "recovered": rec_idx is not None,
         "duration_days": (trough_idx - peak_idx),
     }
@@ -91,10 +95,13 @@ def _max_drawdown(prices: pd.Series, dates: pd.Series):
 
 def metrics_report(df: pd.DataFrame, params: dict) -> dict:
     """收益风险指标总览。params: close(可选，默认识别), rf(年化无风险利率,默认0.02), freq(D/W/M)。"""
-    ohlcv = detect_ohlcv(df)
+    ohlcv = _map_roles(df)  # 宽松映射：只要能找到收盘列即可（日期可选）
     close_col = params.get("close") or (ohlcv.get("close") if ohlcv else "")
     if close_col not in df.columns:
         raise FinanceError("请选择收盘价列（或数据中包含可识别的 收盘/Close 列）")
+    # 输出的 ohlcv 仅供前端参考；无日期时指标照常计算（日期显示为序号）
+    if not ("date" in ohlcv and "close" in ohlcv):
+        ohlcv = {}
     rf = float(params.get("rf", 0.02))
     freq = params.get("freq", "D")
     ann_factor = {"D": TRADING_DAYS, "W": 52, "M": 12, "Q": 4, "Y": 1}.get(freq, TRADING_DAYS)

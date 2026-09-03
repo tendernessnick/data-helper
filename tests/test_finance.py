@@ -272,3 +272,40 @@ def test_datafeed_mock_and_errors():
     # 指数列表
     r3 = client.get("/api/datafeed/indexes")
     assert r3.status_code == 200 and any(x["symbol"] == "000300" for x in r3.json())
+
+
+# ---------- 审查修复回归 ----------
+
+
+def test_regression_metrics_without_date_column():
+    """修复回归：只有收盘列（无日期）时指标照常计算。"""
+    df = pd.DataFrame({"收盘": [10.0, 11.0, 9.5, 10.8, 11.5]})
+    m = finance.metrics_report(df, {"close": "收盘"})
+    assert "NaT" not in m["groups"][1]["items"][1]["value"]  # 回撤日期不再显示 NaT
+    assert m["groups"][1]["items"][1]["value"].startswith("-")  # 有回撤
+    assert "期" in m["groups"][1]["items"][1]["value"]  # 用"第N期"表示
+
+
+def test_regression_metrics_auto_detect_close_only():
+    df = pd.DataFrame({"Close": [10.0, 11.0, 9.5, 10.8, 11.5]})
+    m = finance.metrics_report(df, {})  # 不显式传 close
+    assert len(m["groups"]) == 4
+
+
+def test_regression_corr_matrix_payload():
+    df = pd.DataFrame({"x": np.arange(50.0), "y": np.arange(50.0) * 2})
+    ds = upload_df(df)
+    for method in ("pearson", "spearman", "kendall"):
+        r = client.get(f"/api/datasets/{ds}/corr?method={method}").json()
+        assert r["matrix"] is not None and r["matrix"]["columns"] == ["x", "y"]
+        assert r["values"] == r["matrix"]["values"]
+
+
+def test_regression_growth_daily_note():
+    df = pd.DataFrame({
+        "日期": pd.bdate_range("2024-01-01", periods=400).strftime("%Y-%m-%d"),
+        "v": range(400),
+    })
+    ds = upload_df(df)
+    r = client.post(f"/api/datasets/{ds}/analyze", json={"kind": "growth", "params": {"date_column": "日期", "value_column": "v", "freq": "D"}})
+    assert "漂移" in r.json()["note"]

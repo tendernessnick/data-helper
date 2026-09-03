@@ -11,6 +11,7 @@ import pandas as pd
 
 MAX_ROWS = 100_000
 
+# 修改类语句的关键字（用于第二级检查：分号后拼第二条语句）
 _FORBIDDEN = re.compile(
     r"\b(insert|update|delete|create|drop|alter|attach|detach|copy|export|import|pragma|set|call|vacuum|checkpoint)\b",
     re.IGNORECASE,
@@ -35,10 +36,16 @@ def run_sql(query: str, datasets: list, current_id: str = "") -> dict:
     q = (query or "").strip().rstrip(";")
     if not q:
         raise SqlError("SQL 不能为空")
-    if _FORBIDDEN.search(q):
-        raise SqlError("仅允许 SELECT / WITH 查询（检测到修改类关键字）")
-    if not re.match(r"(?is)^\s*(select|with)\b", q):
-        raise SqlError("仅允许 SELECT / WITH 查询")
+    # 两级只读防护：
+    # 1) 语句必须以 SELECT/WITH 开头（覆盖主查询）
+    # 2) 分号拼接的每一段都必须是查询（拦截 "SELECT 1; DROP TABLE x"）
+    # 不做全文关键字扫描：避免误伤列名/字符串里恰好含 update 等词的合法查询
+    for i, seg in enumerate(q.split(";")):
+        seg = seg.strip()
+        if not seg:
+            continue
+        if not re.match(r"(?is)^(select|with)\b", seg):
+            raise SqlError("仅允许 SELECT / WITH 查询" + (f"（第 {i + 1} 段语句不是查询）" if i else ""))
 
     con = duckdb.connect(":memory:")
     aliases = []
