@@ -1,13 +1,18 @@
 """数据集本地存储。
 
 每个数据集位于 data/datasets/{id}/，包含：
-- meta.json       元信息（名称、行列数、列类型、操作历史）
-- original.*      用户上传的原始文件（用于回滚）
-- current.pkl     当前工作副本（pandas pickle，仅由本程序写入和读取）
+- meta.json            元信息（名称、行列数、列类型、操作历史）
+- original.*           用户上传的原始文件（用于回滚）
+- current.parquet      当前工作副本（Parquet，仅由本程序写入和读取）
+- prev.parquet         撤销快照（只保留最近一步）
+
+历史版本使用 pickle（current.pkl），加载时自动迁移到 Parquet。
 """
 import io
 import json
 import logging
+import os
+import shutil
 import threading
 import uuid
 from datetime import datetime
@@ -23,6 +28,9 @@ DATASETS_DIR = DATA_DIR / "datasets"
 DATASETS_DIR.mkdir(parents=True, exist_ok=True)
 
 MAX_HISTORY = 200
+# 原始文件超过该阈值时走流式建集（分块读 CSV 直接写 Parquet，避免整表进内存）
+STREAM_THRESHOLD_BYTES = 16 * 1024 * 1024
+STREAM_CHUNK_ROWS = 200_000
 _lock = threading.RLock()
 
 
@@ -53,6 +61,44 @@ def _write_meta(d: Path, meta: dict) -> None:
 
 def _columns_info(df: pd.DataFrame) -> list:
     return [{"name": str(c), "dtype": str(df[c].dtype)} for c in df.columns]
+
+
+def _write_parquet(df: pd.DataFrame, path: Path) -> None:
+    """原子写入 Parquet；病态 object 列（混合类型）退化为字符串后重试。"""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    try:
+        df.to_parquet(tmp)
+    except Exception as e:
+        logger.warning("Parquet 直写失败（%s），对 object 列做字符串化重试：%s", type(e).__name__, e)
+        out = df.copy()
+        for c in out.columns:
+            if out[c].dtype == object:
+                out[c] = out[c].astype(str).mask(out[c].isna(), None)
+        out.to_parquet(tmp)
+    os.replace(tmp, path)  # 写一半崩溃不留损坏的 current
+
+
+def _migrate_legacy(d: Path) -> None:
+    """旧版 pickle 存储自动迁移：current.pkl → current.parquet。"""
+    pkl = d / "current.pkl"
+    if not pkl.exists():
+        return
+    df = pd.read_pickle(pkl)
+    _write_parquet(df, d / "current.parquet")
+    pkl.unlink()
+    (d / "prev.pkl").unlink(missing_ok=True)  # 旧快照随迁移一并废弃
+    logger.info("数据集 %s 已从 pickle 迁移到 Parquet", d.name)
+
+
+def current_path(ds_id: str) -> Path:
+    """当前工作副本的 Parquet 路径（必要时先迁移旧 pickle）。"""
+    d = _ds_dir(ds_id)
+    p = d / "current.parquet"
+    if not p.exists():
+        _migrate_legacy(d)
+    if not p.exists():
+        raise DatasetNotFound(ds_id)
+    return p
 
 
 def _decode_bytes(raw: bytes) -> str:
@@ -125,7 +171,7 @@ def create_dataset(name, df: pd.DataFrame, original_filename: str, original_byte
         d.mkdir(parents=True)
         ext = Path(original_filename or "").suffix.lower() or ".bin"
         (d / f"original{ext}").write_bytes(original_bytes)
-        df.to_pickle(d / "current.pkl")
+        _write_parquet(df, d / "current.parquet")
         sheets = _xlsx_sheets(original_bytes) if ext == ".xlsx" else None
         meta = {
             "id": ds_id,
@@ -163,6 +209,97 @@ def _xlsx_sheets(raw: bytes):
         return None
 
 
+def _sniff_csv(src: Path) -> tuple:
+    """嗅探大 CSV 的编码与分隔符（只读首部样本）。"""
+    sample = src.read_bytes()[: 1 << 20]
+    enc = "latin-1"
+    for cand in ("utf-8-sig", "gbk"):
+        try:
+            sample.decode(cand)
+            enc = cand
+            break
+        except UnicodeDecodeError:
+            continue
+    text = sample.decode(enc, errors="replace")
+    lines = text.splitlines()
+    head = lines[0] if lines else ""
+    sep, best_n = ",", head.count(",")
+    for cand in (";", "\t", "|"):
+        n = head.count(cand)
+        if n > best_n:
+            sep, best_n = cand, n
+    return enc, sep
+
+
+def create_dataset_stream(name, src: Path, original_filename: str) -> str:
+    """大 CSV 流式建集：分块读取直接写 Parquet，内存只驻留一个 chunk。
+
+    分隔符误判 / 跨 chunk 类型漂移等任何异常都整体回退到全量解析路径（正确性优先）。
+    """
+    ds_id = datetime.now().strftime("%Y%m%d%H%M%S") + "-" + uuid.uuid4().hex[:6]
+    d = DATASETS_DIR / ds_id
+    d.mkdir(parents=True)
+    try:
+        enc, sep = _sniff_csv(src)
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        rows, cols, columns, writer = 0, 0, [], None
+        schema = None
+        with open(src, "r", encoding=enc, newline="") as f:
+            for chunk in pd.read_csv(f, sep=sep, chunksize=STREAM_CHUNK_ROWS):
+                if writer is None:
+                    if chunk.shape[1] == 1 and any(s in str(chunk.columns[0]) for s in ",;\t|"):
+                        raise ValueError(f"分隔符嗅探失败（表头未按 {sep!r} 切开）")
+                    cols = int(chunk.shape[1])
+                    columns = _columns_info(chunk)
+                    schema = pa.Schema.from_pandas(chunk, preserve_index=False)
+                    writer = pq.ParquetWriter(d / "current.parquet", schema)
+                else:
+                    for c in chunk.columns:  # 跨 chunk 类型漂移：int→float 等安全提升
+                        if chunk[c].dtype != schema.field(str(c)).type.to_pandas_dtype():
+                            try:
+                                chunk[c] = chunk[c].astype(schema.field(str(c)).type.to_pandas_dtype())
+                            except (ValueError, TypeError):
+                                raise ValueError(f"列 {c} 跨块类型冲突，回退全量解析")
+                writer.write_table(pa.Table.from_pandas(chunk, schema=schema, preserve_index=False))
+                rows += int(len(chunk))
+        if writer is None:
+            raise ValueError("文件解析后没有任何数据行")
+        writer.close()
+
+        ext = Path(original_filename or "").suffix.lower() or ".bin"
+        shutil.move(str(src), str(d / f"original{ext}"))
+        meta = {
+            "id": ds_id,
+            "name": (name or "").strip() or Path(original_filename or "").stem or "未命名数据集",
+            "original_filename": original_filename or "",
+            "created_at": _now(),
+            "updated_at": _now(),
+            "rows": rows,
+            "cols": cols,
+            "columns": columns,
+            "sheets": [],
+            "history": [
+                {
+                    "time": _now(),
+                    "action": "上传（流式）",
+                    "detail": f"{original_filename}（{rows} 行 × {cols} 列，分块写入 Parquet）",
+                }
+            ],
+        }
+        with _lock:
+            _write_meta(d, meta)
+        logger.info("流式建集完成 id=%s rows=%d cols=%d", ds_id, rows, cols)
+        return ds_id
+    except Exception as e:
+        logger.warning("流式建集回退全量解析（%s：%s）", type(e).__name__, e)
+        shutil.rmtree(d, ignore_errors=True)
+        raw = src.read_bytes()
+        df = parse_upload(original_filename or "", raw)
+        return create_dataset(name, df, original_filename or "", raw)
+
+
 def list_datasets() -> list:
     out = []
     if DATASETS_DIR.is_dir():
@@ -183,21 +320,18 @@ def get_meta(ds_id: str) -> dict:
 
 
 def load_df(ds_id: str) -> pd.DataFrame:
-    p = _ds_dir(ds_id) / "current.pkl"
-    if not p.exists():
-        raise DatasetNotFound(ds_id)
-    return pd.read_pickle(p)
+    return pd.read_parquet(current_path(ds_id))
 
 
 def save_df(ds_id: str, df: pd.DataFrame, action: str, detail: str = "") -> dict:
     with _lock:
         d = _ds_dir(ds_id)
-        cur = d / "current.pkl"
+        cur = d / "current.parquet"
+        if not cur.exists():
+            _migrate_legacy(d)
         if cur.exists():
-            import shutil
-
-            shutil.copy2(cur, d / "prev.pkl")  # 撤销快照：只保留最近一步
-        df.to_pickle(cur)
+            shutil.copy2(cur, d / "prev.parquet")  # 撤销快照：只保留最近一步
+        _write_parquet(df, cur)
         meta = _read_meta(d)
         meta["rows"] = int(len(df))
         meta["cols"] = int(df.shape[1])
@@ -211,16 +345,19 @@ def save_df(ds_id: str, df: pd.DataFrame, action: str, detail: str = "") -> dict
 
 def undo_dataset(ds_id: str) -> dict:
     """撤销最近一次修改（清洗/变换/回滚），恢复到上一步的数据。"""
+    import shutil
+
     with _lock:
         d = _ds_dir(ds_id)
-        prev = d / "prev.pkl"
+        prev = d / "prev.parquet"
         if not prev.exists():
-            raise DatasetNotFound(f"{ds_id}:no-undo")
-        import shutil
-
-        shutil.copy2(prev, d / "current.pkl")
-        prev.unlink()
-        df = pd.read_pickle(d / "current.pkl")
+            prev = d / "prev.pkl"  # 迁移期兼容：旧版 pickle 快照
+            if not prev.exists():
+                raise DatasetNotFound(f"{ds_id}:no-undo")
+        shutil.copy2(prev, d / "current.parquet")
+        prev.unlink()  # 快照用完即删：只保留一级撤销
+        (d / "current.pkl").unlink(missing_ok=True)  # 迁移期旧版残留清理
+        df = pd.read_parquet(d / "current.parquet")
         meta = _read_meta(d)
         undone = meta["history"].pop() if len(meta["history"]) > 1 else None
         meta["rows"] = int(len(df))
@@ -249,8 +386,6 @@ def rename_dataset(ds_id: str, name: str) -> dict:
 
 def delete_dataset(ds_id: str) -> None:
     with _lock:
-        import shutil
-
         shutil.rmtree(_ds_dir(ds_id))
     logger.info("数据集已删除 id=%s", ds_id)
 

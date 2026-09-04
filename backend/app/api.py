@@ -2,6 +2,8 @@
 import logging
 import os
 import time
+import uuid
+from pathlib import Path
 
 import pandas as pd
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
@@ -29,6 +31,7 @@ from . import profile as prof
 from . import report as report_mod
 from . import sample as sample_mod
 from . import suggest as suggest_mod
+from .paths import DATA_DIR
 from .serialize import rows_payload
 from .storage import DatasetNotFound
 
@@ -36,8 +39,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# 上传大小上限（MB），可用环境变量覆盖；分块读取避免大文件一次性占满内存
-MAX_UPLOAD_MB = int(os.environ.get("DATA_HELPER_MAX_UPLOAD_MB", "200"))
+# 上传大小上限（MB），可用环境变量覆盖；原始文件先落盘临时文件，大 CSV 分块流式读入
+MAX_UPLOAD_MB = int(os.environ.get("DATA_HELPER_MAX_UPLOAD_MB", "500"))
 
 
 def _load(ds_id: str) -> pd.DataFrame:
@@ -59,27 +62,36 @@ def _meta_or_404(ds_id: str) -> dict:
 
 @router.post("/upload")
 async def upload(file: UploadFile = File(...), name: str = Form(None), sheet: str = Form(None)):
-    chunks, size = [], 0
-    while True:
-        chunk = await file.read(8 * 1024 * 1024)
-        if not chunk:
-            break
-        size += len(chunk)
-        if size > MAX_UPLOAD_MB * 1024 * 1024:
-            raise HTTPException(413, f"文件超过大小上限（{MAX_UPLOAD_MB} MB），可调整环境变量 DATA_HELPER_MAX_UPLOAD_MB")
-        chunks.append(chunk)
-    raw = b"".join(chunks)
-    if not raw:
-        raise HTTPException(400, "上传的文件为空")
+    # 先落盘临时文件（8MB 分块），大 CSV 再分块流式读回，内存不驻留整文件
+    tmp = DATA_DIR / f"upload-{uuid.uuid4().hex}.part"
+    size = 0
     try:
-        df = storage.parse_upload(file.filename or "", raw, sheet_name=sheet)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    except Exception as e:  # 解析器抛出的其他异常（结构错误等）
-        logger.warning("文件解析失败 %s：%s", file.filename, e)
-        raise HTTPException(400, f"文件解析失败：{e}")
-    ds_id = storage.create_dataset(name, df, file.filename or "data.csv", raw)
-    logger.info("上传完成 file=%s size=%.1fMB rows=%d", file.filename, size / 1048576, len(df))
+        with tmp.open("wb") as spool:
+            while True:
+                chunk = await file.read(8 * 1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > MAX_UPLOAD_MB * 1024 * 1024:
+                    raise HTTPException(413, f"文件超过大小上限（{MAX_UPLOAD_MB} MB），可调整环境变量 DATA_HELPER_MAX_UPLOAD_MB")
+                spool.write(chunk)
+        if size == 0:
+            raise HTTPException(400, "上传的文件为空")
+        ext = Path(file.filename or "").suffix.lower()
+        if ext in (".csv", ".txt") and size > storage.STREAM_THRESHOLD_BYTES:
+            ds_id = storage.create_dataset_stream(name, tmp, file.filename or "data.csv")
+        else:
+            try:
+                df = storage.parse_upload(file.filename or "", tmp.read_bytes(), sheet_name=sheet)
+            except ValueError as e:
+                raise HTTPException(400, str(e))
+            except Exception as e:  # 解析器抛出的其他异常（结构错误等）
+                logger.warning("文件解析失败 %s：%s", file.filename, e)
+                raise HTTPException(400, f"文件解析失败：{e}")
+            ds_id = storage.create_dataset(name, df, file.filename or "data.csv", tmp.read_bytes())
+    finally:
+        tmp.unlink(missing_ok=True)  # 流式路径已 move 走，其余情况兜底清理
+    logger.info("上传完成 file=%s size=%.1fMB", file.filename, size / 1048576)
     return {"id": ds_id, "meta": storage.get_meta(ds_id)}
 
 
@@ -293,7 +305,7 @@ def run_sql(body: SqlBody):
     metas = storage.list_datasets()
     if body.current_id and not any(m["id"] == body.current_id for m in metas):
         raise HTTPException(404, "当前数据集不存在或已删除")
-    items = [{"id": m["id"], "name": m["name"], "df": storage.load_df(m["id"])} for m in metas]
+    items = [{"id": m["id"], "name": m["name"], "path": str(storage.current_path(m["id"]))} for m in metas]
     current = body.current_id or (metas[0]["id"] if metas else "")
     try:
         result = sqlquery.run_sql(body.query, items, current_id=current)
