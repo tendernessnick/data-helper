@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>数据分析小助手</title>
-<link rel="stylesheet" href="/css/style.css?v=331">
+<link rel="stylesheet" href="/css/style.css?v=332">
 </head>
 <body>
 <div id="app" v-cloak>
@@ -75,13 +75,16 @@
             <button @click="askSuggest('帮我写一段 pandas 代码：新增客单价列并剔除异常值')">🐍 帮我写处理代码</button>
           </div>
         </div>
-        <div class="ai-msg" :class="m.role" v-for="(m, i) in aiMessages" :key="i">
-          <div class="who">{{ m.role === 'user' ? '我' : 'AI 助手' }}</div>
+        <div class="ai-msg" :class="[m.role, {streaming: aiStreaming && i === aiMessages.length - 1 && m.role === 'assistant', pending: m.spinner}]" v-for="(m, i) in aiMessages" :key="i">
+          <div class="who">{{ m.role === 'user' ? '我' : (m.role === 'tool' ? '🔧 执行' : 'AI 助手') }}</div>
           <div class="bubble">
             <template v-for="(seg, j) in parseMsg(m.content)" :key="j">
               <pre v-if="seg.code">{{ seg.text }}</pre>
               <template v-else>{{ seg.text }}</template>
             </template>
+          </div>
+          <div class="ai-msg-actions" v-if="m.card">
+            <button class="btn sm" @click="mainView = 'data'">📊 查看结果卡</button>
           </div>
           <div class="ai-msg-actions" v-if="m.role === 'assistant' && msgHasCode(m)">
             <button class="btn sm" @click="useAiCode(m)">▶ 放入 Python 变换</button>
@@ -92,12 +95,12 @@
       <div class="ai-composer">
         <div class="chat-input">
           <textarea v-model="aiInput" rows="1" @input="autoGrow" @keydown.enter.exact.prevent="sendAi" placeholder="问点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
-          <button class="send-btn" :class="{ready: aiInput.trim()}" @click="sendAi" :disabled="busy || !aiInput.trim()" title="发送">↑</button>
+          <button class="send-btn" :class="{ready: aiStreaming || aiInput.trim()}" @click="sendAi" :disabled="!meta.id || (!aiStreaming && !aiInput.trim())" :title="aiStreaming ? '停止生成' : '发送'">{{ aiStreaming ? "■" : "↑" }}</button>
         </div>
         <div class="chat-quick">
           <button @click="askAiInsight" :disabled="busy || !meta.id" title="基于一键洞察结果生成业务解读">💡 解读洞察</button>
           <button @click="askAiChart" :disabled="busy || !aiInput.trim()" title="把输入框的描述直接生成图表卡片">📊 描述出图</button>
-          <button v-if="aiMessages.length" class="danger" @click="aiMessages = []" :disabled="busy">🗑 清空对话</button>
+          <button v-if="aiMessages.length" class="danger" @click="resetAiChat" :disabled="busy">🗑 清空对话</button>
         </div>
       </div>
     </main>
@@ -1339,6 +1342,6 @@
 
 <script src="/vendor/echarts.min.js?v=331"></script>
 <script src="/vendor/vue.global.prod.js?v=331"></script>
-<script src="/js/app.js?v=331"></script>
+<script src="/js/app.js?v=332"></script>
 </body>
 </html>

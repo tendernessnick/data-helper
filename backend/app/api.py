@@ -1,4 +1,5 @@
 """全部 HTTP API 路由（挂在 /api 前缀下）。"""
+import json
 import logging
 import os
 import time
@@ -7,10 +8,11 @@ from pathlib import Path
 
 import pandas as pd
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from . import (
+    agent,
     ai,
     analysis,
     biz,
@@ -554,6 +556,41 @@ def ai_chat(body: AiChatBody):
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"reply": reply}
+
+
+class AiStreamBody(BaseModel):
+    dataset_id: str
+    message: str
+    session_id: str = ""
+
+
+@router.post("/ai/chat/stream")
+def ai_chat_stream(body: AiStreamBody):
+    """AI Agent 流式对话（SSE）：delta 正文增量 / tool_start 工具进度 / tool_result 结果卡。"""
+
+    _meta_or_404(body.dataset_id)
+    if not body.message.strip():
+        raise HTTPException(400, "消息为空")
+    df = _load(body.dataset_id)
+    context = ai.build_context(storage.get_meta(body.dataset_id), prof.profile_columns(df))
+    sid = (body.session_id or "").strip() or uuid.uuid4().hex
+
+    def gen():
+        yield f"data: {json.dumps({'type': 'session', 'session_id': sid}, ensure_ascii=False)}\n\n"
+        try:
+            for evt in agent.stream_agent(context, body.message.strip(), df, sid=sid):
+                yield f"data: {json.dumps(evt, ensure_ascii=False, default=str)}\n\n"
+        except agent.LlmError as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+        except Exception as e:  # 兜底：流已开始，只能以事件形式报错
+            logger.exception("AI 流式对话异常")
+            yield f"data: {json.dumps({'type': 'error', 'message': f'服务异常：{e}'}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 class AiChartBody(BaseModel):

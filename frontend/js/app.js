@@ -126,6 +126,9 @@ const app = createApp({
       aiConfigured: false,
       aiMessages: [],
       aiInput: "",
+      aiSessionId: "",
+      aiStreaming: false,
+      aiAbort: null,
 
       // 粘贴导入
       pasteOpen: false,
@@ -1457,19 +1460,91 @@ const app = createApp({
     },
 
     async sendAi() {
+      if (this.aiStreaming) { this.aiAbort && this.aiAbort.abort(); return; }
       const q = this.aiInput.trim();
       if (!q || !this.currentId) return;
       this.aiInput = "";
       this.aiMessages.push({ role: "user", content: q });
+      await this.aiStream(q);
+    },
+
+    // SSE 流式对话：LLM 出意图 → 后端本地执行工具 → 结果卡回填数据页
+    async aiStream(text) {
+      this.aiStreaming = true;
       this.busy = true;
-      this.scrollChat();
+      const ctrl = new AbortController();
+      this.aiAbort = ctrl;
+      let assistant = null;
+      const ensure = () => {
+        if (!assistant) { assistant = { role: "assistant", content: "" }; this.aiMessages.push(assistant); }
+        return assistant;
+      };
       try {
-        const r = await this.api("POST", "/api/ai/chat", { dataset_id: this.currentId, messages: this.aiMessages.slice(-10) });
-        this.aiMessages.push({ role: "assistant", content: r.reply });
+        const resp = await fetch("/api/ai/chat/stream", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ dataset_id: this.currentId, message: text, session_id: this.aiSessionId }),
+          signal: ctrl.signal,
+        });
+        if (!resp.ok || !resp.body) throw new Error(`流式连接失败（${resp.status}）`);
+        const reader = resp.body.getReader();
+        const dec = new TextDecoder();
+        let buf = "", toolIdx = -1;
+        const handle = (frame) => {
+          const line = frame.split("\n").find((l) => l.startsWith("data:"));
+          if (!line) return;
+          let evt;
+          try { evt = JSON.parse(line.slice(5).trim()); } catch { return; }
+          if (evt.type === "session") { this.aiSessionId = evt.session_id; }
+          else if (evt.type === "delta") { ensure().content += evt.text || ""; this.scrollChat(); }
+          else if (evt.type === "tool_start") {
+            this.aiMessages.push({ role: "tool", content: `⏳ ${evt.label || evt.name}…`, spinner: true });
+            toolIdx = this.aiMessages.length - 1;
+            this.scrollChat();
+          } else if (evt.type === "tool_result") {
+            if (toolIdx >= 0) this.aiMessages.splice(toolIdx, 1);
+            toolIdx = -1;
+            this.addCard(evt.card);
+            this.aiMessages.push({ role: "tool", content: `✅ 已完成「${evt.card.title}」，结果卡已加入数据页`, card: true });
+            this.toast(`AI 已生成结果卡：${evt.card.title}`);
+            this.scrollChat();
+          } else if (evt.type === "note") {
+            this.aiMessages.push({ role: "tool", content: `ℹ️ ${evt.text}` });
+            this.scrollChat();
+          } else if (evt.type === "error") {
+            throw new Error(evt.message);
+          } else if (evt.type === "done") {
+            if (assistant && !assistant.content && evt.text) assistant.content = evt.text;
+          }
+        };
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          let idx;
+          while ((idx = buf.indexOf("\n\n")) >= 0) {
+            const frame = buf.slice(0, idx).trim();
+            buf = buf.slice(idx + 2);
+            if (frame) handle(frame);
+          }
+        }
+        if (buf.trim()) handle(buf.trim());
+        if (!assistant || !assistant.content) ensure().content = "（模型没有返回内容）";
       } catch (e) {
-        this.aiMessages.push({ role: "assistant", content: "⚠ " + e.message });
-        this.toast(e.message, "error");
-      } finally { this.busy = false; this.scrollChat(); }
+        const note = e.name === "AbortError" ? "⏹ 已停止生成" : "⚠ " + e.message;
+        if (assistant && assistant.content) assistant.content += `\n\n${note}`;
+        else this.aiMessages.push({ role: "assistant", content: note });
+        if (e.name !== "AbortError") this.toast(e.message, "error");
+      } finally {
+        this.aiStreaming = false;
+        this.busy = false;
+        this.aiAbort = null;
+        this.scrollChat();
+      }
+    },
+
+    resetAiChat() {
+      this.aiMessages = [];
+      this.aiSessionId = "";
     },
 
     async askAiInsight() {
@@ -1477,14 +1552,7 @@ const app = createApp({
       if (!card) { this.toast("请先点击「🔍 一键洞察」生成洞察结果", "error"); return; }
       const summary = card.payload.alerts.join("\n");
       this.aiMessages.push({ role: "user", content: `以下是对当前数据集的自动洞察结果，请用业务视角解读这些发现并给出建议行动：\n${summary}` });
-      this.busy = true;
-      this.scrollChat();
-      try {
-        const r = await this.api("POST", "/api/ai/chat", { dataset_id: this.currentId, messages: this.aiMessages.slice(-10) });
-        this.aiMessages.push({ role: "assistant", content: r.reply });
-      } catch (e) {
-        this.aiMessages.push({ role: "assistant", content: "⚠ " + e.message });
-      } finally { this.busy = false; this.scrollChat(); }
+      await this.aiStream(`以下是对当前数据集的自动洞察结果，请用业务视角解读这些发现并给出建议行动：\n${summary}`);
     },
 
     askSuggest(q) {

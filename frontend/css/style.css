@@ -688,6 +688,16 @@ html[data-theme="dark"] .chat-msg.user .bubble { color: #fff; }
 }
 .ai-msg.user .bubble pre { background: rgba(255,255,255,.2); }
 .ai-msg-actions { display: flex; gap: 8px; margin-top: 8px; }
+.ai-msg.tool { max-width: 70%; margin-bottom: 12px; }
+.ai-msg.tool .bubble {
+  padding: 8px 14px; border-radius: 14px; font-size: 13px; color: var(--text-2);
+  background: var(--glass); border: 1px dashed var(--border); box-shadow: none;
+}
+.ai-msg.tool.pending .bubble { animation: aiPulse 1.2s ease-in-out infinite; }
+@keyframes aiPulse { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
+.ai-msg.streaming .bubble::after {
+  content: "▋"; margin-left: 2px; color: var(--accent); animation: aiPulse .8s ease-in-out infinite;
+}
 
 /* 底部输入区 */
 .ai-composer {
