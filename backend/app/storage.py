@@ -165,9 +165,18 @@ def parse_upload(filename: str, raw: bytes, sheet_name=None) -> pd.DataFrame:
     return df
 
 
+def _new_ds_id() -> str:
+    """生成数据集目录 id：时间戳 + uuid6 位。占用即重生成（防碰撞/TOCTOU）。"""
+    for _ in range(8):
+        ds_id = datetime.now().strftime("%Y%m%d%H%M%S") + "-" + uuid.uuid4().hex[:6]
+        if not (DATASETS_DIR / ds_id).exists():
+            return ds_id
+    raise RuntimeError("无法生成可用的数据集 id（目录异常，请检查 data/datasets）")
+
+
 def create_dataset(name, df: pd.DataFrame, original_filename: str, original_bytes: bytes,
                    action: str = "上传", detail: str = "") -> str:
-    ds_id = datetime.now().strftime("%Y%m%d%H%M%S") + "-" + uuid.uuid4().hex[:6]
+    ds_id = _new_ds_id()
     with _lock:
         d = DATASETS_DIR / ds_id
         d.mkdir(parents=True)
@@ -238,7 +247,7 @@ def create_dataset_stream(name, src: Path, original_filename: str) -> str:
 
     分隔符误判 / 跨 chunk 类型漂移等任何异常都整体回退到全量解析路径（正确性优先）。
     """
-    ds_id = datetime.now().strftime("%Y%m%d%H%M%S") + "-" + uuid.uuid4().hex[:6]
+    ds_id = _new_ds_id()
     d = DATASETS_DIR / ds_id
     d.mkdir(parents=True)
     try:
