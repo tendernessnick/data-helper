@@ -188,3 +188,79 @@ def test_tools_schema_complete():
     assert {"describe", "groupby", "trend", "corr", "histogram", "value_counts", "rfm", "funnel", "cohort", "cluster", "prop_z_test", "forecast"} <= names
     for f in agent.TOOLS_SCHEMA:
         assert f["type"] == "function" and f["function"]["parameters"]["type"] == "object"
+
+
+# ---------- 工具注册表冒烟：12 个工具在本地真实执行 ----------
+
+
+def _tool_df(name):
+    if name in ("funnel", "cohort"):
+        return pd.DataFrame({
+            "uid": [f"u{i % 5}" for i in range(90)],
+            "event": [["浏览", "加购", "下单"][i % 3] for i in range(90)],
+            "date": pd.date_range("2026-01-01", periods=90, freq="D"),
+        })
+    if name == "cluster":
+        return pd.DataFrame({"a": range(30), "b": [x * 2 + (i % 3) for i, x in enumerate(range(30))]})
+    if name == "prop_z_test":
+        return None
+    return pd.DataFrame({
+        "cat": ["x", "y", "x", "y", "x"] * 4,
+        "date": pd.date_range("2026-01-01", periods=20, freq="D"),
+        "val": list(range(20)),
+        "val2": [x * 0.5 for x in range(20)],
+    })
+
+
+TOOL_PARAMS = {
+    "describe": ({}, "df"),
+    "groupby": ({"by": ["cat"], "metrics": [{"column": "val", "agg": "sum"}]}, "df"),
+    "trend": ({"date_column": "date", "value_column": "val", "freq": "D"}, "df"),
+    "corr": ({"columns": ["val", "val2"]}, "df"),
+    "histogram": ({"column": "val"}, "df"),
+    "value_counts": ({"column": "cat"}, "df"),
+    "rfm": ({"id_column": "cat", "date_column": "date", "value_column": "val"}, "df"),
+    "funnel": ({"user_column": "uid", "event_column": "event", "steps": ["浏览", "加购", "下单"]}, "funnel"),
+    "cohort": ({"user_column": "uid", "date_column": "date", "freq": "M", "periods": 2}, "funnel"),
+    "cluster": ({"columns": ["a", "b"], "k": 2}, "cluster"),
+    "prop_z_test": ({"success_a": 120, "n_a": 1000, "success_b": 150, "n_b": 1000}, "prop_z_test"),
+    "forecast": ({"date_column": "date", "value_column": "val", "freq": "D", "horizon": 3}, "df"),
+}
+
+
+def test_all_registered_tools_run_locally():
+    for tool in agent.TOOLS:
+        name = tool["name"]
+        params, df_key = TOOL_PARAMS[name]
+        df = _tool_df(df_key)
+        card, summary = agent._run_tool(df, {"name": name, "arguments": json.dumps(params), "id": "x"})
+        assert card is not None, f"工具 {name} 执行失败: {summary}"
+        assert isinstance(summary, dict), name
+        assert card["payload"] is summary or isinstance(card["payload"], dict)
+
+
+def test_all_tools_have_label_and_card():
+    for tool in agent.TOOLS:
+        assert tool["label"], tool["name"]
+        assert tool["card"]["type"] and tool["card"]["title"], tool["name"]
+
+
+def test_run_tool_bad_json_and_unknown_name():
+    card, summary = agent._run_tool(pd.DataFrame(), {"name": "groupby", "arguments": "{bad", "id": "x"})
+    assert card is None and "JSON" in summary["error"]
+    card2, summary2 = agent._run_tool(pd.DataFrame(), {"name": "nope", "arguments": "{}", "id": "x"})
+    assert card2 is None and "未知工具" in summary2["error"]
+
+
+def test_max_tool_rounds_guard(monkeypatch):
+    # 模型永远要求调工具：轮次耗尽后强制无工具总结，不无限循环
+    monkeypatch.setattr(agent, "load_config", lambda: {"api_key": "k", "base_url": "http://x", "model": "m"})
+    def fake_post(cfg, payload, timeout):
+        if payload.get("tools"):
+            return FakeResp([chunk(tool_calls=tool_call(name="describe", arguments="{}")), "data: [DONE]"])
+        return FakeResp([chunk("总结完毕"), "data: [DONE]"])
+    monkeypatch.setattr(agent, "_post_llm", fake_post)
+    events = list(agent.stream_agent("摘要", "分析", DF))
+    starts = [e for e in events if e["type"] == "tool_start"]
+    assert len(starts) == agent.MAX_TOOL_ROUNDS
+    assert next(e for e in events if e["type"] == "done")["text"] == "总结完毕"

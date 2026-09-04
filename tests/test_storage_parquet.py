@@ -167,3 +167,19 @@ def test_meta_columns_dtype_serializable(force_stream):
     ds = upload("t.csv", "a,b\n1,x\n2,y\n")
     meta = json.loads((storage.DATASETS_DIR / ds / "meta.json").read_text(encoding="utf-8"))
     assert meta["columns"][0]["dtype"].startswith("int")
+
+
+def test_reset_dataset_rebuilds_parquet_from_original():
+    ds = upload("r.csv", "a,b\n1,x\n2,y\n")
+    storage.save_df(ds, pd.DataFrame({"a": [9]}), "覆盖")
+    meta = storage.reset_dataset(ds)
+    assert meta["rows"] == 2
+    assert storage.load_df(ds)["a"].tolist() == [1, 2]
+
+
+def test_delete_dataset_removes_dir():
+    ds = upload("d.csv", "a\n1\n")
+    d = storage.DATASETS_DIR / ds
+    assert d.exists()
+    storage.delete_dataset(ds)
+    assert not d.exists()

@@ -185,3 +185,26 @@ def test_compare_groups_has_cohens_d():
     assert 0.3 < abs(body["effect_size"]) < 1.6   # 偏大效应（均值差约 0.6σ）
     d_test = [t for t in body["tests"] if "Cohen" in t["name"]]
     assert d_test and ("中" in d_test[0]["verdict"] or "大" in d_test[0]["verdict"] or "小" in d_test[0]["verdict"])
+
+
+# ---------- Phase 2 补充边界 ----------
+
+
+def test_funnel_needs_at_least_two_steps():
+    ds = _upload_df(pd.DataFrame({"u": ["a", "b"], "e": ["s1", "s2"]}))
+    r = client.post(f"/api/datasets/{ds}/funnel", json={"params": {"user_column": "u", "event_column": "e", "steps": ["s1"]}})
+    assert r.status_code == 400
+    assert "至少需要 2 个步骤" in r.json()["detail"]
+
+
+def test_cohort_rejects_invalid_freq():
+    ds = _upload_df(pd.DataFrame({"u": ["a", "b"], "d": ["2026-01-01", "2026-02-01"]}))
+    r = client.post(f"/api/datasets/{ds}/cohort", json={"params": {"user_column": "地区", "date_column": "地区", "freq": "Q"}})
+    assert r.status_code == 400
+    assert "粒度" in r.json()["detail"]
+
+
+def test_cluster_rejects_single_column():
+    ds = _upload_df(pd.DataFrame({"x": [1, 2, 3], "y": [4, 5, 6]}))
+    r = client.post(f"/api/datasets/{ds}/cluster", json={"params": {"columns": ["销售额"]}})
+    assert r.status_code == 400
