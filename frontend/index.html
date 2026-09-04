@@ -284,8 +284,11 @@
             <template v-else-if="card.type === 'test'">
               <div class="result-note" style="margin-bottom:9px">{{ card.payload.note }}</div>
               <div class="test-pill" v-for="(t, i) in card.payload.tests" :key="i" :class="t.significant ? 'sig' : 'nosig'">
-                <div><span class="tname">{{ t.name }}</span><span style="color:var(--text-2);margin-left:8px">统计量 {{ t.stat }}</span><span v-if="t.dof !== undefined" style="color:var(--text-2)">，df={{ t.dof }}</span></div>
-                <span class="verdict" :class="t.significant ? 'sig-text' : 'nosig-text'">p = {{ t.p }} · {{ t.significant ? '显著' : '不显著' }}</span>
+                <div><span class="tname">{{ t.name }}</span><span style="color:var(--text-2);margin-left:8px" v-if="t.stat !== undefined">统计量 {{ t.stat }}</span><span v-if="t.dof !== undefined" style="color:var(--text-2)">，df={{ t.dof }}</span></div>
+                <span class="verdict" :class="t.significant ? 'sig-text' : 'nosig-text'">
+                  <template v-if="t.p === null && t.verdict">{{ t.verdict }}</template>
+                  <template v-else>p = {{ t.p }} · {{ t.significant ? '显著' : '不显著' }}</template>
+                </span>
               </div>
               <div class="table-scroll" style="max-height:200px" v-if="card.payload.desc && card.payload.desc_columns">
                 <table class="data">
@@ -810,6 +813,9 @@
               <option value="rfm">RFM 客户价值分层</option>
               <option value="pareto">ABC / 帕累托分析</option>
               <option value="outliers">异常值检测</option>
+              <option value="funnel">转化漏斗</option>
+              <option value="cohort">同期群留存</option>
+              <option value="cluster">K-means 聚类</option>
             </select>
           </div>
 
@@ -851,6 +857,49 @@
             </div>
           </div>
 
+          <div v-if="bizKind === 'funnel'">
+            <div class="dock-hint">用户完成各步骤的去重人数与转化率（到达制口径）。</div>
+            <div class="field"><label>用户/主体列</label>
+              <select v-model="biz.funnelUserCol"><option v-for="c in catCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
+            </div>
+            <div class="field"><label>事件列</label>
+              <select v-model="biz.funnelEventCol"><option v-for="c in catCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
+            </div>
+            <div class="field"><label>步骤（按顺序，逗号分隔）</label>
+              <input type="text" v-model="biz.funnelSteps" placeholder="浏览, 加购, 下单, 支付">
+            </div>
+          </div>
+
+          <div v-if="bizKind === 'cohort'">
+            <div class="dock-hint">按首次活跃时间分群，看每期还有多少用户回头。</div>
+            <div class="field"><label>用户/主体列</label>
+              <select v-model="biz.cohortUserCol"><option v-for="c in catCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
+            </div>
+            <div class="field"><label>日期列</label>
+              <select v-model="biz.cohortDateCol"><option v-for="c in meta.columns" :key="c.name" :value="c.name">{{ c.name }}</option></select>
+            </div>
+            <div class="form-row">
+              <div class="field"><label>粒度</label>
+                <select v-model="biz.cohortFreq"><option value="M">按月</option><option value="W">按周</option></select>
+              </div>
+              <div class="field"><label>期数</label>
+                <input type="number" v-model.number="biz.cohortPeriods" min="2" max="12">
+              </div>
+            </div>
+          </div>
+
+          <div v-if="bizKind === 'cluster'">
+            <div class="dock-hint">手写 K-means（k-means++ + 多重启），肘部法 + 轮廓系数自动推荐 k。</div>
+            <div class="field"><label>数值特征列（≥2 个）</label>
+              <select v-model="biz.clusterCols" multiple size="4">
+                <option v-for="c in numCols" :key="c.name" :value="c.name">{{ c.name }}</option>
+              </select>
+            </div>
+            <div class="field"><label>k（0 = 自动推荐）</label>
+              <input type="number" v-model.number="biz.clusterK" min="0" max="10">
+            </div>
+          </div>
+
           <button class="btn primary" style="width:100%" @click="runBiz" :disabled="busy || !bizReady">开始分析</button>
         </div>
       </div>
@@ -867,6 +916,8 @@
               <option value="compare_groups">组间比较 t / ANOVA</option>
               <option value="chi2">卡方独立性（两类别列）</option>
               <option value="corr_test">相关性显著性（两数值列）</option>
+              <option value="prop_z">A/B 转化率检验（两比例 z）</option>
+              <option value="sample_size">A/B 样本量计算</option>
             </select>
           </div>
 
@@ -899,6 +950,41 @@
             </div>
             <div class="field"><label>数值列 Y</label>
               <select v-model="stat.colY"><option v-for="c in numCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
+            </div>
+          </div>
+
+          <div v-if="statKind === 'prop_z'">
+            <div class="dock-hint">A/B 两组各有多少人转化？差值是否超出波动范围。</div>
+            <div class="field"><label>实验分组列（恰好 2 组）</label>
+              <select v-model="stat.propGroupCol"><option v-for="c in catCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
+            </div>
+            <div class="form-row">
+              <div class="field"><label>转化事件列</label>
+                <select v-model="stat.propSuccessCol"><option v-for="c in meta.columns" :key="c.name" :value="c.name">{{ c.name }}</option></select>
+              </div>
+              <div class="field"><label>代表转化的取值</label>
+                <input type="text" v-model="stat.propSuccessValue" placeholder="如 1 或 已支付">
+              </div>
+            </div>
+          </div>
+
+          <div v-if="statKind === 'sample_size'">
+            <div class="dock-hint">实验前估算：要多大的样本量才能可靠检测出目标提升。</div>
+            <div class="form-row">
+              <div class="field"><label>基线转化率（0-1）</label>
+                <input type="number" v-model.number="stat.ssBaseline" min="0.001" max="0.999" step="0.01">
+              </div>
+              <div class="field"><label>MDE（%）</label>
+                <input type="number" v-model.number="stat.ssMde" min="0.1" step="0.5">
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="field"><label>MDE 口径</label>
+                <select v-model="stat.ssRelative"><option :value="false">绝对差（pp）</option><option :value="true">相对提升（%）</option></select>
+              </div>
+              <div class="field"><label>统计效能</label>
+                <select v-model="stat.ssPower"><option value="0.8">80%</option><option value="0.9">90%</option></select>
+              </div>
             </div>
           </div>
 

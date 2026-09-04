@@ -72,11 +72,16 @@ const app = createApp({
 
       // 业务模板
       bizKind: "rfm",
-      biz: { idCol: "", dateCol: "", valCol: "", catCol: "", topN: 30, outCols: [], outMethod: "iqr" },
+      biz: { idCol: "", dateCol: "", valCol: "", catCol: "", topN: 30, outCols: [], outMethod: "iqr",
+             funnelUserCol: "", funnelEventCol: "", funnelSteps: "",
+             cohortUserCol: "", cohortDateCol: "", cohortFreq: "M", cohortPeriods: 8,
+             clusterCols: [], clusterK: 0 },
 
       // 统计检验
       statKind: "normality",
-      stat: { col: "", groupCol: "", valCol: "", colA: "", colB: "", colX: "", colY: "" },
+      stat: { col: "", groupCol: "", valCol: "", colA: "", colB: "", colX: "", colY: "",
+              propGroupCol: "", propSuccessCol: "", propSuccessValue: "",
+              ssBaseline: 0.10, ssMde: 2, ssRelative: false, ssAlpha: 0.05, ssPower: 0.8 },
 
       // SQL 控制台
       sqlQuery: "",
@@ -159,6 +164,9 @@ const app = createApp({
       const b = this.biz, k = this.bizKind;
       if (k === "rfm") return b.idCol && b.dateCol && b.valCol;
       if (k === "pareto") return b.catCol && b.valCol;
+      if (k === "funnel") return b.funnelUserCol && b.funnelEventCol && b.funnelSteps.trim();
+      if (k === "cohort") return b.cohortUserCol && b.cohortDateCol;
+      if (k === "cluster") return b.clusterCols.length >= 2;
       return true;
     },
     statReady() {
@@ -167,6 +175,8 @@ const app = createApp({
       if (k === "compare_groups") return s.groupCol && s.valCol;
       if (k === "chi2") return s.colA && s.colB;
       if (k === "corr_test") return s.colX && s.colY;
+      if (k === "prop_z") return s.propGroupCol && s.propSuccessCol && String(s.propSuccessValue).trim() !== "";
+      if (k === "sample_size") return s.ssBaseline > 0 && s.ssMde !== 0;
       return false;
     },
     statusMissing() {
@@ -333,7 +343,7 @@ const app = createApp({
       // 是否需要图表容器
       const R = card.payload;
       card.chartDiv = !!(R.matrix || R.box_stats || R.pareto || R.points || R.forecast_meta || R.heatmap || R.row_labels
-        || R.curve || R.scatter || R.frontier || (R.kline_safe)
+        || R.curve || R.scatter || R.frontier || R.funnel || R.cohort || R.cluster_points || (R.kline_safe)
         || (R.rows && R.rows.length > 1 && R.columns && R.columns.some((c) => c.numeric)));
       if (card.type === "test") card.chartDiv = false;
       if (card.type === "kline") card.chartDiv = true;
@@ -444,6 +454,71 @@ const app = createApp({
             series: [
               { name: R.columns[1] ? R.columns[1].name : "数值", type: "bar", data: values, itemStyle: { color: T.palette[0], borderRadius: [4, 4, 0, 0] } },
               { name: "累计占比%", type: "line", yAxisIndex: 1, data: cums, smooth: true, itemStyle: { color: T.orange }, lineStyle: { color: T.orange }, markLine: { data: [{ yAxis: 80, name: "80%" }], lineStyle: { type: "dashed", color: T.palette[3] }, label: { formatter: "80%", color: T.txt } } },
+            ],
+          });
+          return;
+        }
+
+        // 漏斗图
+        if (R.funnel) {
+          const f = R.funnel;
+          chart.setOption({
+            tooltip: { trigger: "item", formatter: (p) => `${p.name}: ${p.value} 人` },
+            toolbox: { feature: { saveAsImage: { title: "保存" } }, right: 15 },
+            series: [{
+              type: "funnel", left: "8%", right: "8%", top: 15, bottom: 20,
+              minSize: "18%", sort: "descending", gap: 3,
+              label: { show: true, position: "inside", formatter: "{b}: {c}", fontSize: 12, color: "#fff" },
+              itemStyle: { borderWidth: 0 },
+              data: f.steps.map((s, i) => ({ name: s, value: f.values[i] })),
+              color: T.palette,
+            }],
+          });
+          return;
+        }
+
+        // 同期群留存热力图（%）
+        if (R.cohort) {
+          const c = R.cohort;
+          const data = [];
+          c.values.forEach((row, i) => row.forEach((v, j) => { if (v !== null && !isNaN(v)) data.push([j, i, v]); }));
+          chart.setOption({
+            tooltip: { position: "top",
+              formatter: (p) => `${c.row_labels[p.value[1]]} · ${c.col_labels[p.value[0]]}: ${p.value[2]}%` },
+            grid: { left: 80, bottom: 80, right: 20, top: 15 },
+            xAxis: { type: "category", data: c.col_labels, axisLabel: { fontSize: 10, color: T.txt } },
+            yAxis: { type: "category", data: c.row_labels, axisLabel: { fontSize: 10, color: T.txt } },
+            visualMap: { min: 0, max: 100, calculable: true, orient: "horizontal", left: "center", bottom: 0,
+              textStyle: { color: T.txt }, itemWidth: 12,
+              inRange: { color: ["#ffffff", "#93c5fd", "#2563eb"] } },
+            series: [{ type: "heatmap", data,
+              label: { show: true, fontSize: 10, color: T.txtEm, formatter: (p) => p.value[2] + "%" } }],
+          });
+          return;
+        }
+
+        // 聚类散点（按簇着色 + 中心标记）
+        if (R.cluster_points) {
+          const cp = R.cluster_points;
+          const nClusters = Math.max(...cp.labels) + 1;
+          const byCluster = {};
+          cp.x.forEach((x, i) => {
+            (byCluster[cp.labels[i]] = byCluster[cp.labels[i]] || []).push([x, cp.y[i]]);
+          });
+          chart.setOption({
+            tooltip: { formatter: (p) => `${cp.xlabel}: ${p.value[0]}<br>${cp.ylabel}: ${p.value[1]}` },
+            legend: { bottom: 0, textStyle: { color: T.txt, fontSize: 11 } },
+            grid: { left: 65, right: 20, top: 25, bottom: 45 },
+            toolbox: { feature: { saveAsImage: { title: "保存" } }, right: 15 },
+            xAxis: { type: "value", scale: true, name: cp.xlabel, nameTextStyle: { color: T.txt, fontSize: 10 }, axisLabel: { color: T.txt }, splitLine: { lineStyle: { color: T.split } } },
+            yAxis: { type: "value", scale: true, name: cp.ylabel, nameTextStyle: { color: T.txt, fontSize: 10 }, axisLabel: { color: T.txt }, splitLine: { lineStyle: { color: T.split } } },
+            series: [
+              ...Array.from({ length: nClusters }, (_, ci) => ({
+                name: `簇${ci + 1}`, type: "scatter", data: byCluster[ci] || [],
+                symbolSize: 6, itemStyle: { color: T.palette[ci % T.palette.length], opacity: 0.65 },
+              })),
+              { name: "中心", type: "scatter", data: cp.centers, symbolSize: 14, symbol: "diamond",
+                itemStyle: { color: T.orange }, label: { show: true, formatter: "中心", position: "top", fontSize: 9, color: T.txt } },
             ],
           });
           return;
@@ -958,6 +1033,27 @@ const app = createApp({
 
     async runBiz() {
       const b = this.biz, k = this.bizKind;
+      // 新业务模板：走专用端点，返回带特征字段的卡片
+      if (k === "funnel" || k === "cohort" || k === "cluster") {
+        const titles = { funnel: "转化漏斗", cohort: "同期群留存", cluster: "K-means 聚类" };
+        let params;
+        if (k === "funnel") {
+          params = { user_column: b.funnelUserCol, event_column: b.funnelEventCol,
+                     steps: b.funnelSteps.split(/[，,、\s]+/).map((s) => s.trim()).filter(Boolean) };
+        } else if (k === "cohort") {
+          params = { user_column: b.cohortUserCol, date_column: b.cohortDateCol,
+                     freq: b.cohortFreq, periods: b.cohortPeriods };
+        } else {
+          params = { columns: b.clusterCols, k: b.clusterK || 0, seed: 42 };
+        }
+        this.busy = true;
+        try {
+          const R = await this.api("POST", `/api/datasets/${this.currentId}/${k}`, { params });
+          this.addCard({ type: k, icon: "🎯", title: titles[k], payload: R, span2: k !== "funnel" });
+        } catch (e) { this.toast(e.message, "error"); }
+        finally { this.busy = false; }
+        return;
+      }
       let params;
       if (k === "rfm") params = { id_column: b.idCol, date_column: b.dateCol, value_column: b.valCol };
       else if (k === "pareto") params = { category_column: b.catCol, value_column: b.valCol, top_n: b.topN };
@@ -1137,7 +1233,9 @@ const app = createApp({
       if (this.statKind === "normality") params = { column: s.col };
       else if (this.statKind === "compare_groups") params = { group_column: s.groupCol, value_column: s.valCol };
       else if (this.statKind === "chi2") params = { column_a: s.colA, column_b: s.colB };
-      else params = { column_x: s.colX, column_y: s.colY };
+      else if (this.statKind === "corr_test") params = { column_x: s.colX, column_y: s.colY };
+      else if (this.statKind === "prop_z") params = { group_column: s.propGroupCol, success_column: s.propSuccessCol, success_value: s.propSuccessValue };
+      else if (this.statKind === "sample_size") params = { baseline: s.ssBaseline, mde: s.ssMde / 100, relative: s.ssRelative, alpha: s.ssAlpha, power: s.ssPower };
       this.busy = true;
       try {
         const R = await this.api("POST", `/api/datasets/${this.currentId}/test`, { test: this.statKind, params });
@@ -1146,6 +1244,8 @@ const app = createApp({
           compare_groups: `组间比较：${R.value_column} 按 ${R.group_column}`,
           chi2: `卡方独立性「${R.column_a} × ${R.column_b}」`,
           corr_test: `相关性检验「${R.column_x} × ${R.column_y}」`,
+          prop_z: "A/B 转化率检验（两比例 z）",
+          sample_size: "A/B 样本量计算",
         };
         this.addCard({ type: "test", icon: "🧪", title: titleMap[this.statKind], payload: R });
       } catch (e) { this.toast(e.message, "error"); }
