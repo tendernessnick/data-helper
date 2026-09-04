@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>数据分析小助手</title>
-<link rel="stylesheet" href="/css/style.css?v=333">
+<link rel="stylesheet" href="/css/style.css?v=334">
 </head>
 <body>
 <div id="app" v-cloak>
@@ -55,6 +55,7 @@
           <b>🤖 AI 分析助手</b>
           <span class="badge-dot" :class="{on: aiConfigured}"></span>
           <span class="ai-head-model">{{ aiConfigured ? aiSettings.model : '未连接' }}</span>
+          <span class="ai-warn-chip" v-if="!meta.id" title="AI 回答需要数据上下文：请回数据页在左侧选择一个数据集">⚠ 未选数据集</span>
         </div>
         <div style="display:flex;gap:8px">
           <button class="btn sm" @click="aiSettingsOpen = true">⚙️ 连接设置</button>
@@ -75,14 +76,16 @@
             <button @click="askSuggest('帮我写一段 pandas 代码：新增客单价列并剔除异常值')">🐍 帮我写处理代码</button>
           </div>
         </div>
-        <div class="ai-msg" :class="[m.role, {streaming: aiStreaming && i === aiMessages.length - 1 && m.role === 'assistant', pending: m.spinner}]" v-for="(m, i) in aiMessages" :key="i">
-          <div class="who">{{ m.role === 'user' ? '我' : (m.role === 'tool' ? '🔧 执行' : 'AI 助手') }}</div>
-          <div class="bubble">
+        <div class="ai-msg" :class="[m.role, {streaming: aiStreaming && i === aiMessages.length - 1 && m.role === 'assistant', pending: m.spinner && !m.thinking}]" v-for="(m, i) in aiMessages" :key="i">
+          <div class="who">{{ m.role === 'user' ? '我' : (m.kind === 'thinking' ? '🧠 思考' : (m.role === 'tool' ? '🔧 执行' : 'AI 助手')) }}</div>
+          <div class="bubble" :class="{thinking: m.kind === 'thinking'}">
+            <span v-if="m.kind === 'thinking'" class="dots"><i></i><i></i><i></i></span>
             <template v-for="(seg, j) in parseMsg(m.content)" :key="j">
               <pre v-if="seg.code">{{ seg.text }}</pre>
               <template v-else>{{ seg.text }}</template>
             </template>
           </div>
+          <div class="typing-label" v-if="aiStreaming && m.role === 'assistant' && i === aiMessages.length - 1 && m.content && !m.done"><span class="pulse-dot"></span>正在回复…</div>
           <div class="ai-msg-actions" v-if="m.card">
             <button class="btn sm" @click="mainView = 'data'">📊 查看结果卡</button>
           </div>
@@ -94,8 +97,8 @@
 
       <div class="ai-composer">
         <div class="chat-input">
-          <textarea v-model="aiInput" rows="1" @input="autoGrow" @keydown.enter.exact.prevent="sendAi" placeholder="问点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
-          <button class="send-btn" :class="{ready: aiStreaming || aiInput.trim()}" @click="sendAi" :disabled="!meta.id || (!aiStreaming && !aiInput.trim())" :title="aiStreaming ? '停止生成' : '发送'">{{ aiStreaming ? "■" : "↑" }}</button>
+          <textarea v-model="aiInput" rows="1" @input="autoGrow" @keydown.enter.exact.prevent="sendAi($event)" placeholder="问点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
+          <button class="send-btn" :class="{ready: aiStreaming || aiInput.trim()}" @click="sendAi()" :disabled="!aiStreaming && !aiInput.trim()" :title="aiStreaming ? '停止生成' : '发送'">{{ aiStreaming ? "■" : "↑" }}</button>
         </div>
         <div class="chat-quick">
           <button @click="askAiInsight" :disabled="busy || !meta.id" title="基于一键洞察结果生成业务解读">💡 解读洞察</button>
@@ -1342,6 +1345,6 @@
 
 <script src="/vendor/echarts.min.js?v=331"></script>
 <script src="/vendor/vue.global.prod.js?v=331"></script>
-<script src="/js/app.js?v=333"></script>
+<script src="/js/app.js?v=334"></script>
 </body>
 </html>

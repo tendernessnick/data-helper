@@ -271,7 +271,15 @@ const app = createApp({
     autoGrow(e) {
       const el = e.target;
       el.style.height = "auto";
-      el.style.height = Math.min(el.scrollHeight, 96) + "px";
+      el.style.height = Math.min(el.scrollHeight, 140) + "px";  // 与 CSS max-height 对齐
+    },
+
+    resetInputHeight() {
+      // 程序化清空不触发 @input，发送后必须手动收回复单行高度
+      this.$nextTick(() => {
+        const el = document.querySelector(".ai-composer .chat-input textarea");
+        if (el) el.style.height = "";
+      });
     },
 
     aggLabel(a) {
@@ -1488,11 +1496,17 @@ const app = createApp({
       } catch (e) { this.toast(e.message, "error"); }
     },
 
-    async sendAi() {
+    async sendAi(e) {
+      if (e && e.isComposing) return;  // 中文输入法组词回车不发送
       if (this.aiStreaming) { this.aiAbort && this.aiAbort.abort(); return; }
       const q = this.aiInput.trim();
-      if (!q || !this.currentId) return;
+      if (!q) return;
+      if (!this.currentId) {
+        this.toast("请先在左侧选择一个数据集——AI 回答需要数据上下文", "error");
+        return;
+      }
       this.aiInput = "";
+      this.resetInputHeight();
       this.aiMessages.push({ role: "user", content: q });
       await this.aiStream(q);
     },
@@ -1504,7 +1518,15 @@ const app = createApp({
       const ctrl = new AbortController();
       this.aiAbort = ctrl;
       let assistant = null, reader = null;
+      // 思考态气泡：发送→首个 token 之间给用户明确反馈（建连+LLM 首 token 可能数秒）
+      const thinkMsg = { role: "tool", kind: "thinking", content: "正在思考…", spinner: true };
+      this.aiMessages.push(thinkMsg);
+      const dropThinking = () => {
+        const idx = this.aiMessages.indexOf(thinkMsg);
+        if (idx >= 0) this.aiMessages.splice(idx, 1);
+      };
       const ensure = () => {
+        dropThinking();  // 首个正文 token 到达：思考结束，进入回复
         if (!assistant) { assistant = { role: "assistant", content: "" }; this.aiMessages.push(assistant); }
         return assistant;
       };
@@ -1529,6 +1551,7 @@ const app = createApp({
           if (evt.type === "session") { this.aiSessionId = evt.session_id; }
           else if (evt.type === "delta") { ensure().content += evt.text || ""; this.scrollChat(); }
           else if (evt.type === "tool_start") {
+            dropThinking();  // 有工具反馈接管状态提示
             this.aiMessages.push({ role: "tool", content: `⏳ ${evt.label || evt.name}…`, spinner: true });
             toolIdx = this.aiMessages.length - 1;
             this.scrollChat();
@@ -1548,6 +1571,7 @@ const app = createApp({
           } else if (evt.type === "error") {
             throw new Error(evt.message);
           } else if (evt.type === "done") {
+            dropThinking();
             if (assistant && !assistant.content && evt.text) assistant.content = evt.text;
           }
         };
