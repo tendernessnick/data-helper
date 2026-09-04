@@ -51,7 +51,12 @@ def funnel(df: pd.DataFrame, params: dict) -> dict:
 
     rows = []
     for i, (s, n) in enumerate(zip(steps, counts)):
-        step_rate = (n / counts[i - 1] * 100) if i and counts[i - 1] else 100.0
+        if i == 0:
+            step_rate = 100.0
+        elif counts[i - 1]:
+            step_rate = n / counts[i - 1] * 100
+        else:
+            step_rate = 0.0  # 前一步已无人到达，本步转化率记 0（0/0 无定义）
         overall = n / counts[0] * 100
         drop = counts[i - 1] - n if i else 0
         rows.append([s, n, round(step_rate, 2), round(overall, 2), drop])
@@ -243,6 +248,7 @@ def cluster(df: pd.DataFrame, params: dict) -> dict:
     X = X_raw.to_numpy(dtype=float)
     if standardize:
         mu, sigma = X.mean(axis=0), X.std(axis=0)
+        sigma = np.where(sigma == 0, 1.0, sigma)  # 抽样后某列可能退化为常数，除零会产生 NaN 污染全表
         X = (X - mu) / sigma
 
     ks = list(range(k_min, k_max + 1))

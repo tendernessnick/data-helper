@@ -421,7 +421,7 @@ def pareto(df: pd.DataFrame, params: dict) -> dict:
             {"name": "ABC分级", "numeric": False},
         ],
         "rows": rows_out,
-        "note": f"帕累托/ABC：A 类 {n_a} 项贡献 {a_share}%（≤80%），B 类 {n_b} 项，其余为 C 类",
+        "note": f"帕累托/ABC：A 类 {n_a} 项（累计占比越过 80% 线之前）累计贡献 {a_share}%，B 类 {n_b} 项，其余为 C 类",
         "pareto": True,
     }
 

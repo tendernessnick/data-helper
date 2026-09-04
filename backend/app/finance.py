@@ -600,10 +600,13 @@ def ljung_box_test(df: pd.DataFrame, params: dict) -> dict:
         raise FinanceError("滞后阶无效")
 
     tests = []
+    arr = x.to_numpy()
+    centered = arr - arr.mean()
+    denom = float((centered * centered).sum())
     for k in lags:
-        q = n * (n + 2) * sum(
-            float(x.autocorr(lag=j)) ** 2 / (n - j) for j in range(1, k + 1)
-        )
+        # 经典 ACF：全局均值 + 有偏方差（Series.autocorr 是分段 Pearson，会低估 Q，不适用于本公式）
+        acf = [float((centered[j:] * centered[: len(centered) - j]).sum() / denom) for j in range(1, k + 1)]
+        q = n * (n + 2) * sum(rho * rho / (n - j) for j, rho in enumerate(acf, start=1))
         p = float(1 - sps.chi2.cdf(q, k))
         tests.append({
             "name": "滞后 {} 阶".format(k),

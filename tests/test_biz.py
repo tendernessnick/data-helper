@@ -208,3 +208,17 @@ def test_cluster_rejects_single_column():
     ds = _upload_df(pd.DataFrame({"x": [1, 2, 3], "y": [4, 5, 6]}))
     r = client.post(f"/api/datasets/{ds}/cluster", json={"params": {"columns": ["销售额"]}})
     assert r.status_code == 400
+
+
+def test_funnel_degenerate_zero_step_rate():
+    """回归：第 2 步无人到达时，第 3 步的单步转化率应记 0 而不是 100（0/0 无定义）。"""
+    rows = [(f"u{i}", "s1") for i in range(4)]  # 无人触发 s2 / s3
+    ds = _upload_df(pd.DataFrame(rows, columns=["u", "e"]))
+    r = client.post(f"/api/datasets/{ds}/funnel", json={"params": {"user_column": "u", "event_column": "e", "steps": ["s1", "s2", "s3"]}})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    counts = [row[1] for row in body["rows"]]
+    assert counts == [4, 0, 0]
+    assert body["rows"][1][2] == 0.0  # 0/4
+    assert body["rows"][2][2] == 0.0  # 前一步已无人：0/0 记 0（修复前错误地显示 100）
+    assert body["rows"][2][3] == 0.0  # 整体转化率 0

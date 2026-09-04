@@ -310,3 +310,26 @@ def test_regression_growth_daily_note():
     ds = upload_df(df)
     r = client.post(f"/api/datasets/{ds}/analyze", json={"kind": "growth", "params": {"date_column": "日期", "value_column": "v", "freq": "D"}})
     assert "漂移" in r.json()["note"]
+
+
+def test_ljung_box_uses_classic_acf():
+    """回归：Q 统计量必须用经典 ACF（全局均值+有偏方差）。
+
+    Series.autocorr 是分段 Pearson 相关，会系统性偏离 Ljung-Box 公式
+    （对趋势序列偏差可达数十个百分点）。
+    """
+    import numpy as np
+    from scipy import stats as sps
+
+    rng = np.random.default_rng(3)
+    x = pd.Series(np.cumsum(rng.normal(0, 1, 150)))  # 趋势序列：两种 ACF 差异明显
+    res = finance.ljung_box_test(pd.DataFrame({"v": x}), {"column": "v", "lags": 5})
+    q_mod = res["tests"][0]["stat"]
+
+    arr = x.to_numpy()
+    xc = arr - arr.mean()
+    denom = float((xc * xc).sum())
+    acf = [float((xc[j:] * xc[: len(xc) - j]).sum() / denom) for j in range(1, 6)]
+    q_ref = 150 * 152 * sum(r * r / (150 - j) for j, r in enumerate(acf, start=1))
+    assert abs(q_mod - q_ref) < 1e-2
+    assert res["tests"][0]["p"] == round(float(1 - sps.chi2.cdf(q_ref, 5)), 6)
