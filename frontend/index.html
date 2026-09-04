@@ -1311,6 +1311,15 @@
           <input type="password" v-model="aiSettings.api_key" :placeholder="aiSettings.has_key ? '已保存 ' + aiSettings.api_key + '，输入新 Key 可更换' : 'sk-...'">
         </div>
         <div class="hint" v-if="aiConfigured" style="color:var(--green)">● 当前已连接：<b>{{ aiSettings.model }}</b></div>
+        <div style="margin-top:14px;padding:10px 12px;border:1px dashed var(--border);border-radius:10px;background:var(--surface-2)">
+          <b style="font-size:12.5px">🔌 外接聊天客户端（MCP）</b>
+          <div class="hint" style="margin:6px 0">不想用内置对话？在 Cherry Studio / ChatWise 等客户端里填<b>你自己的 API Key</b>，并把下面的 MCP 地址添加为工具源，AI 就能直接调用本软件的分析工具（数据不出本机）：</div>
+          <div style="display:flex;gap:6px;align-items:center">
+            <code id="mcp-url" style="flex:1;font-size:12px;padding:5px 8px;background:var(--surface-3);border-radius:6px;user-select:all">{{ mcpUrl }}</code>
+            <button class="btn sm" @click="copyMcpUrl">复制</button>
+          </div>
+          <div class="hint" style="margin-top:6px">详见使用手册 docs/MCP.md（含 Cherry Studio 配置步骤）</div>
+        </div>
       </div>
       <div class="modal-foot">
         <button class="btn" @click="aiSettingsOpen = false">取消</button>

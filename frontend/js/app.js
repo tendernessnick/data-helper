@@ -150,6 +150,11 @@ const app = createApp({
   },
 
   computed: {
+    mcpUrl() {
+      // MCP 与主应用同端口；Streamable HTTP 端点为 /mcp/mcp
+      return `${location.origin}/mcp/mcp`;
+    },
+
     filteredDatasets() {
       const q = (this.dsSearch || "").trim().toLowerCase();
       if (!q) return this.datasets;
@@ -1598,6 +1603,16 @@ const app = createApp({
         this.busy = false;
         this.aiAbort = null;
         this.scrollChat();
+      }
+    },
+
+    copyMcpUrl() {
+      const url = this.mcpUrl;
+      const done = () => this.toast(`已复制：${url}`);
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(url).then(done, () => this.toast(url));
+      } else {
+        this.toast(url);
       }
     },
 

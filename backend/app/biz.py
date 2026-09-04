@@ -33,6 +33,8 @@ def funnel(df: pd.DataFrame, params: dict) -> dict:
     steps = [str(s).strip() for s in (params.get("steps") or []) if str(s).strip()]
     for c in (user_col, event_col):
         _check(df, c)
+    if user_col == event_col:
+        raise AnalysisError("用户列与事件列不能是同一列")
     if len(steps) < 2:
         raise AnalysisError("漏斗至少需要 2 个步骤")
 

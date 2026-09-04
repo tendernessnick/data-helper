@@ -1,0 +1,3 @@
+2026-09-04 15:08:07,968 INFO [backend.app.main] 数据分析小助手启动
+2026-09-04 15:08:08,584 INFO [backend.app.mcpserver] MCP 服务器已构建（16 个工具）
+2026-09-04 15:08:08,584 INFO [backend.app.main] MCP 已挂载：Streamable HTTP /mcp/mcp；SSE /sse/sse

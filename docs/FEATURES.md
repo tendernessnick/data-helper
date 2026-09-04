@@ -73,7 +73,11 @@
 - 自然语言出图（图表 spec 生成 + 直接执行）
 - 「解读洞察」：一键把本地洞察结果交给 AI 做业务解读
 
-## 十、在线行情与金融分析
+## 十、MCP 服务端（外接 AI）
+
+外部聊天客户端（Cherry Studio / ChatWise 等）填用户自己的 API Key，把本软件加为 MCP 工具源（Streamable HTTP `/mcp/mcp`、SSE `/sse/sse`），客户端 AI 可调用 15 个只读工具：list_datasets / column_profile / read_rows / sql_query / describe / groupby / correlation / value_counts / trend / rfm / funnel / cohort / cluster / ab_prop_test / forecast（结果 200 行封顶）。接入指南见 docs/MCP.md。
+
+## 十一、在线行情与金融分析
 
 - **在线行情**（akshare，可选）：A 股个股（东财主源 + 新浪降级，日/周/月线，前/后复权）与常用指数；60s 超时防护；热门股票搜索（代码/名称，字面匹配）；离线示例股票数据生成
 - **收益风险指标**：区间总收益/年化（几何）、年化波动、最大回撤（峰值/谷底日期）、下行波动、VaR/CVaR 95%/99%、Sharpe/Sortino/Calmar、偏度峰度、累计收益曲线
@@ -83,7 +87,7 @@
 - **投资组合**：2-5 资产，年化收益/协方差，2000 组 Dirichlet 随机权重的有效前沿 + 最小方差/最大 Sharpe 点 + 相关矩阵
 - **计量检验**：ADF 单位根（手写 OLS，含常数/趋势两种，MacKinnon 近似临界值）、Ljung-Box 自相关（经典 ACF）
 
-## 十一、对比 / 采样 / 变换 / 导出
+## 十二、对比 / 采样 / 变换 / 导出
 
 - 数据集对比：列增删/类型变化/行数/共同数值列统计差异/按键匹配
 - 采样：随机/分层/前 N → 新数据集（分层保留分层列）
@@ -91,7 +95,7 @@
 - 导出：数据集与任意结果卡 → CSV（utf-8-sig）/ XLSX（超 104 万行给出明确提示改用 CSV）
 - HTML 报告：洞察全文 + 自动图表（直方图/Top10/月度趋势/相关热力）内嵌 echarts，自包含离线可看（用户内容全部转义）
 
-## 十二、工程与基建
+## 十三、工程与基建
 
 - 测试：150+ 项 pytest（上传/存储/SQL/业务模板/检验/Agent mock LLM/金融/报告导出）
 - CI：GitHub Actions（ruff + pytest，Python 3.12/3.14）；ruff 零告警

@@ -2,7 +2,7 @@
 
 **本地运行的数据分析工作台**：导入 → 洞察 → 清洗 → SQL / 统计 / 时序 / 业务模板（RFM · 漏斗 · 留存 · 聚类 · A/B）→ AI Agent 辅助分析 → 可视化与报告。**数据全程不出本机**——AI 只看到列结构摘要，分析计算全部在你电脑上完成。
 
-![CI](https://github.com/tendernessnick/data-helper/actions/workflows/ci.yml/badge.svg) ![tests](https://img.shields.io/badge/tests-169%20passed-brightgreen) ![技术栈](https://img.shields.io/badge/Python-3.12%2B-blue) ![后端](https://img.shields.io/badge/FastAPI%20%2B%20DuckDB%20%2B%20SciPy-green) ![前端](https://img.shields.io/badge/Vue3%20%2B%20ECharts-无构建-orange) ![存储](https://img.shields.io/badge/存储-Parquet%20列存-blueviolet) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
+![CI](https://github.com/tendernessnick/data-helper/actions/workflows/ci.yml/badge.svg) ![tests](https://img.shields.io/badge/tests-176%20passed-brightgreen) ![技术栈](https://img.shields.io/badge/Python-3.12%2B-blue) ![后端](https://img.shields.io/badge/FastAPI%20%2B%20DuckDB%20%2B%20SciPy-green) ![前端](https://img.shields.io/badge/Vue3%20%2B%20ECharts-无构建-orange) ![存储](https://img.shields.io/badge/存储-Parquet%20列存-blueviolet) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
 
 ---
 
@@ -50,7 +50,7 @@
 python -m venv .venv
 .venv\Scripts\pip install -r requirements-dev.txt
 .venv\Scripts\python run_app.py            # 或 uvicorn backend.app.main:app --port 8765 --reload
-.venv\Scripts\python -m pytest tests/ -q   # 169 项测试
+.venv\Scripts\python -m pytest tests/ -q   # 176 项测试
 ```
 
 ## ✨ 功能一览
@@ -65,6 +65,7 @@ python -m venv .venv
 | 🎯 业务模板 | **RFM 分层**（五分位 → 8 层）、**转化漏斗**（到达制口径 + 流失明细）、**同期群留存**（月/周粒度 N 期矩阵）、**K-means 聚类**（手写 k-means++ + 多重启 + 肘部法/轮廓系数自动选 k + 簇画像散点）、ABC 帕累托、异常值检测 |
 | 🧪 统计检验 | 正态性（Shapiro-Wilk/Jarque-Bera）、组间比较（Welch t/ANOVA/Mann-Whitney/Kruskal-Wallis + **Cohen's d 效应量**）、**两比例 z 检验（A/B 转化：差值 CI + 相对提升）**、**样本量计算器**（α/power/基线/MDE → 每组 n）、卡方（Cramér's V）、相关显著性 |
 | 🗄️ SQL 控制台 | DuckDB 引擎，数据集注册 `ds1/ds2…`+`df`；**直接注册 Parquet 视图惰性读取**（不整表载入内存）；只读防护；结果可存为新数据集（不截断） |
+| 🔌 MCP 服务端（可选） | **外接现成聊天界面**：Cherry Studio / ChatWise 等客户端填你自己的 API Key，把本软件添加为 MCP 工具源，客户端里的 AI 直接调用 15 个本地分析工具（数据集浏览/SQL/RFM/漏斗/留存/聚类/A-B/预测）——LLM 在客户端、数据在本机（[docs/MCP.md](docs/MCP.md)） |
 | 🤖 AI Agent（可选） | **SSE 流式对话**（逐字渲染 + 停止按钮）；**function calling 工具循环**：12 个分析工具（RFM/漏斗/留存/聚类/A-B/预测/SQL 式聚合…）以 JSON Schema 注册，LLM 出意图、后端在本地 DataFrame 真实执行、结果卡自动回填；内存级会话历史 + schema 注入；端点不支持 tools 自动回退纯文本。**只有列结构摘要离开本机** |
 | 📡 在线行情 / 💰 金融分析 | akshare（东财主源+新浪降级）；收益风险指标（年化/回撤/Sharpe/VaR…）、K 线（MA+成交量+缩放）、8 类技术指标、CAPM 基准对比、组合有效前沿、ADF/Ljung-Box |
 | ⚖️ 对比与采样 | 数据集对比（列/类型/统计差异/键匹配）+ 随机/分层采样 |
@@ -130,7 +131,7 @@ data_helper/
 ├── examples/ecommerce/   # 百万行电商分析叙事 + 全部结果 JSON
 ├── docs/FEATURES.md      # 完整功能清单（模块化，含审计验收基准）
 ├── docs/screenshots/     # 真实界面截图
-├── tests/                # 169 项 pytest
+├── tests/                # 176 项 pytest
 └── .github/workflows/ci.yml  # ruff + pytest（Python 3.12/3.14）
 ```
 
@@ -144,7 +145,7 @@ data_helper/
 
 ## 🧪 测试与质量
 
-**169 项 pytest 全绿**：上传解析（含 GBK/JSON/XLSX/流式大文件/类型漂移回退）、Parquet 存储与 pickle 自动迁移、SQL（含建集不截断回归）、漏斗/留存/聚类业务模板、统计检验与 A/B 套件、AI Agent（mock LLM：工具循环/错误回填/降级回退/会话历史/SSE 协议）、金融、预测、报告导出等。`ruff` 零告警；CI 在 Python 3.12 / 3.14 双版本跑 lint + tests。
+**176 项 pytest 全绿**：上传解析（含 GBK/JSON/XLSX/流式大文件/类型漂移回退）、Parquet 存储与 pickle 自动迁移、SQL（含建集不截断回归）、漏斗/留存/聚类业务模板、统计检验与 A/B 套件、AI Agent（mock LLM：工具循环/错误回填/降级回退/会话历史/SSE 协议）、金融、预测、报告导出等。`ruff` 零告警；CI 在 Python 3.12 / 3.14 双版本跑 lint + tests。
 
 ## ⚠️ 说明与边界
 
