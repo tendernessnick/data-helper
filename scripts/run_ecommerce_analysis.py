@@ -133,9 +133,10 @@ def run_analysis():
     a = _alias(raw_id)
 
     print("[2/6] SQL 清洗与派生…")
-    # 有效销售（排除取消单/退货行/无客户ID）
+    # 有效销售（排除取消单/退货行/无客户ID）；CustomerID 转文本以便 UI 侧也归为类别列
     clean = f'''
-    SELECT "InvoiceNo", "CustomerID", "InvoiceDate", "Quantity", "Price", "Country",
+    SELECT "InvoiceNo", CAST(CAST("CustomerID" AS BIGINT) AS VARCHAR) AS "CustomerID", "InvoiceDate",
+           "Quantity", "Price", "Country",
            ROUND("Quantity" * "Price", 2) AS "Amount"
     FROM {a}
     WHERE "CustomerID" IS NOT NULL AND "Quantity" > 0 AND "InvoiceNo" NOT LIKE 'C%' AND "Price" > 0
@@ -182,11 +183,13 @@ def run_analysis():
       FROM s GROUP BY 1
     ),
     q75 AS (SELECT quantile_cont(total_amt, 0.75) AS t75 FROM percust)
-    SELECT uid, '首购' AS event FROM percust
-    UNION ALL
-    SELECT uid, '复购' FROM percust WHERE orders_cnt >= 2
-    UNION ALL
-    SELECT uid, '高价值' FROM percust CROSS JOIN q75 WHERE total_amt >= t75
+    SELECT CAST(uid AS VARCHAR) AS uid, event FROM (
+      SELECT uid, '首购' AS event FROM percust
+      UNION ALL
+      SELECT uid, '复购' FROM percust WHERE orders_cnt >= 2
+      UNION ALL
+      SELECT uid, '高价值' FROM percust CROSS JOIN q75 WHERE total_amt >= t75
+    )
     '''
     events_id = new_dataset_from_sql("客户生命周期事件", events_sql, clean_id)
     funnel = biz_run(events_id, "funnel", {"user_column": "uid", "event_column": "event", "steps": ["首购", "复购", "高价值"]})

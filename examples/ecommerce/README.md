@@ -129,4 +129,16 @@ WHERE "CustomerID" IS NOT NULL AND "Quantity" > 0
 
 ## 界面截图
 
-（截图见仓库根 README——数据工作台、留存热力图、聚类散点、生命周期漏斗四张关键图。）
+分析过程中对应的结果卡截图（仓库 `docs/screenshots/`）：
+
+| 数据工作台（80.5 万行有效销售） | RFM 客户分层 |
+|---|---|
+| ![工作台](../../docs/screenshots/workbench.png) | ![RFM](../../docs/screenshots/rfm.png) |
+
+| 同期群留存热力图 | K-means 聚类 |
+|---|---|
+| ![留存](../../docs/screenshots/cohort.png) | ![聚类](../../docs/screenshots/cluster.png) |
+
+| 生命周期漏斗 |
+|---|
+| ![漏斗](../../docs/screenshots/funnel.png) |
