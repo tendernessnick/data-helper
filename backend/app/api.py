@@ -1,4 +1,8 @@
 """全部 HTTP API 路由（挂在 /api 前缀下）。"""
+import logging
+import os
+import time
+
 import pandas as pd
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
@@ -7,6 +11,7 @@ from pydantic import BaseModel
 from . import (
     ai,
     analysis,
+    biz,
     cleaning,
     datafeed,
     deepprofile,
@@ -27,7 +32,12 @@ from . import suggest as suggest_mod
 from .serialize import rows_payload
 from .storage import DatasetNotFound
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
+
+# 上传大小上限（MB），可用环境变量覆盖；分块读取避免大文件一次性占满内存
+MAX_UPLOAD_MB = int(os.environ.get("DATA_HELPER_MAX_UPLOAD_MB", "200"))
 
 
 def _load(ds_id: str) -> pd.DataFrame:
@@ -49,7 +59,16 @@ def _meta_or_404(ds_id: str) -> dict:
 
 @router.post("/upload")
 async def upload(file: UploadFile = File(...), name: str = Form(None), sheet: str = Form(None)):
-    raw = await file.read()
+    chunks, size = [], 0
+    while True:
+        chunk = await file.read(8 * 1024 * 1024)
+        if not chunk:
+            break
+        size += len(chunk)
+        if size > MAX_UPLOAD_MB * 1024 * 1024:
+            raise HTTPException(413, f"文件超过大小上限（{MAX_UPLOAD_MB} MB），可调整环境变量 DATA_HELPER_MAX_UPLOAD_MB")
+        chunks.append(chunk)
+    raw = b"".join(chunks)
     if not raw:
         raise HTTPException(400, "上传的文件为空")
     try:
@@ -57,8 +76,10 @@ async def upload(file: UploadFile = File(...), name: str = Form(None), sheet: st
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:  # 解析器抛出的其他异常（结构错误等）
+        logger.warning("文件解析失败 %s：%s", file.filename, e)
         raise HTTPException(400, f"文件解析失败：{e}")
     ds_id = storage.create_dataset(name, df, file.filename or "data.csv", raw)
+    logger.info("上传完成 file=%s size=%.1fMB rows=%d", file.filename, size / 1048576, len(df))
     return {"id": ds_id, "meta": storage.get_meta(ds_id)}
 
 
@@ -358,6 +379,36 @@ def forecast(ds_id: str, body: ForecastBody):
         raise HTTPException(400, str(e))
 
 
+# ---------- 业务模板（漏斗 / 同期群留存 / 聚类） ----------
+
+
+@router.post("/datasets/{ds_id}/funnel")
+def funnel(ds_id: str, body: ForecastBody):
+    df = _load(ds_id)
+    try:
+        return biz.funnel(df, body.params)
+    except analysis.AnalysisError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/datasets/{ds_id}/cohort")
+def cohort(ds_id: str, body: ForecastBody):
+    df = _load(ds_id)
+    try:
+        return biz.cohort(df, body.params)
+    except analysis.AnalysisError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/datasets/{ds_id}/cluster")
+def cluster(ds_id: str, body: ForecastBody):
+    df = _load(ds_id)
+    try:
+        return biz.cluster(df, body.params)
+    except analysis.AnalysisError as e:
+        raise HTTPException(400, str(e))
+
+
 # ---------- 交叉热力 / 对比 / 采样 / 图表推荐 ----------
 
 
@@ -637,12 +688,14 @@ class FeedBody(BaseModel):
 @router.post("/datafeed/fetch")
 def datafeed_fetch(body: FeedBody):
     try:
+        t0 = time.monotonic()
         if body.source == "index":
             df = datafeed.fetch_index(body.symbol, body.start, body.end, body.period)
             name = f"指数{body.symbol}"
         else:
             df = datafeed.fetch_stock(body.symbol, body.start, body.end, body.period, body.adjust)
             name = f"股票{body.symbol}"
+        logger.info("行情拉取 %s %s~%s %d 行 耗时=%.1fs", body.symbol, body.start, body.end, len(df), time.monotonic() - t0)
     except datafeed.FeedError as e:
         raise HTTPException(400, str(e))
     except Exception as e:  # 打包环境缺模块等未知错误 → 友好暴露而非 500

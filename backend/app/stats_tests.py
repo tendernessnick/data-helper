@@ -1,4 +1,6 @@
-"""统计检验套件（scipy）：正态性 / 组间比较 / 卡方 / 相关性检验。"""
+"""统计检验套件（scipy）：正态性 / 组间比较 / 卡方 / 相关性检验 / A-B 实验方法。"""
+import math
+
 import pandas as pd
 from scipy import stats
 
@@ -105,6 +107,9 @@ def compare_groups(df: pd.DataFrame, params: dict) -> dict:
         out["tests"].append({"name": "Welch t 检验（两组均值）", "stat": round(float(t_stat), 4), **_conclusion(t_p)})
         u_stat, u_p = stats.mannwhitneyu(arrs[0], arrs[1], alternative="two-sided")
         out["tests"].append({"name": "Mann-Whitney U（非参数）", "stat": round(float(u_stat), 4), **_conclusion(u_p)})
+        d = cohens_d(arrs[0], arrs[1])
+        out["effect_size"] = d
+        out["tests"].append({"name": "Cohen's d 效应量", "stat": round(d, 4), **_effect_verdict(abs(d))})
         out["pair"] = [groups[0][0], groups[1][0]]
     else:
         f_stat, f_p = stats.f_oneway(*arrs)
@@ -192,3 +197,169 @@ def run_test(df: pd.DataFrame, test: str, params: dict) -> dict:
     if test not in TESTS:
         raise TestError(f"未知检验: {test}，可选: {', '.join(TESTS)}")
     return TESTS[test](df, params or {})
+
+
+# ---------------- A/B 实验方法 ----------------
+
+
+def _z_crit(two_sided: bool, alpha: float) -> float:
+    """标准正态分位数。"""
+    return float(stats.norm.ppf(1 - alpha / (2 if two_sided else 1)))
+
+
+def cohens_d(a, b) -> float:
+    """Cohen's d：合并标准差标准化均值差。"""
+    n1, n2 = len(a), len(b)
+    s2 = ((n1 - 1) * a.var(ddof=1) + (n2 - 1) * b.var(ddof=1)) / max(n1 + n2 - 2, 1)
+    if s2 <= 0:
+        return 0.0
+    return float((a.mean() - b.mean()) / math.sqrt(s2))
+
+
+def _effect_verdict(v: float) -> dict:
+    """效应量分级（Cohen 惯例：0.2 小 / 0.5 中 / 0.8 大）。"""
+    level = "可忽略"
+    for t, name in ((0.8, "大"), (0.5, "中"), (0.2, "小")):
+        if v >= t:
+            level = name
+            break
+    return {"p": None, "significant": None, "verdict": f"效应量：{level}（0.2 小 / 0.5 中 / 0.8 大）"}
+
+
+def _prop_stats(successes: float, n: float) -> float:
+    return float(successes) / float(n) if n else 0.0
+
+
+def _success_flag(s: pd.Series, success_value) -> pd.Series:
+    """转化判定：数值列按数值比较，文本列按精确匹配；NaN 保持缺失以便剔除。"""
+    if pd.api.types.is_numeric_dtype(s):
+        try:
+            return pd.to_numeric(s, errors="coerce") == float(success_value)
+        except (TypeError, ValueError):
+            raise TestError("success_value 应为数值（转化列是数值列）")
+    return s.astype(str).str.strip() == str(success_value)
+
+
+def prop_z_test(df: pd.DataFrame | None, params: dict) -> dict:
+    """两比例 z 检验（A/B 转化率场景）。
+
+    两种输入：
+    - 数据集模式：group_column（实验组标记列）+ success_column（转化事件列）+ success_value（转化取值）
+    - 直接计数模式：success_a / n_a / success_b / n_b
+    输出转化率、差值、相对提升、z 统计量、p 值与差值的置信区间。
+    """
+    if df is None or "success_a" in params:
+        sa = float(params.get("success_a", 0))
+        na = float(params.get("n_a", 0))
+        sb = float(params.get("success_b", 0))
+        nb = float(params.get("n_b", 0))
+        if min(sa, na, sb, nb) < 0 or sa > na or sb > nb:
+            raise TestError("成功数不能为负且不能超过总数")
+        if na <= 0 or nb <= 0:
+            raise TestError("两组样本数都必须大于 0")
+        label_a, label_b = "A 组", "B 组"
+    else:
+        group_col = params.get("group_column", "")
+        success_col = params.get("success_column", "")
+        success_value = params.get("success_value", "")
+        if group_col not in df.columns:
+            raise TestError(f"列不存在: {group_col}")
+        if success_col not in df.columns:
+            raise TestError(f"列不存在: {success_col}（需要提供转化事件列）")
+        tmp = df[[group_col]].dropna().astype(str)
+        levels = tmp[group_col].value_counts()
+        if len(levels) != 2:
+            raise TestError(f"分组列需要恰好 2 个取值（当前 {len(levels)} 个：{', '.join(map(str, levels.index[:5]))}）")
+        g_a, g_b = levels.index.tolist()
+        sub = pd.DataFrame({
+            "g": df[group_col].astype(str),
+            "hit": _success_flag(df[success_col], success_value),
+        }).dropna()
+        na = int((sub["g"] == g_a).sum())
+        nb = int((sub["g"] == g_b).sum())
+        sa = int(sub.loc[sub["g"] == g_a, "hit"].sum())
+        sb = int(sub.loc[sub["g"] == g_b, "hit"].sum())
+        label_a, label_b = str(g_a), str(g_b)
+        if min(na, nb) == 0:
+            raise TestError("两组样本数都必须大于 0")
+
+    pa, pb = _prop_stats(sa, na), _prop_stats(sb, nb)
+    diff = pb - pa
+    pooled = (sa + sb) / (na + nb)
+    se_pooled = math.sqrt(pooled * (1 - pooled) * (1 / na + 1 / nb))
+    if se_pooled == 0:
+        raise TestError("两组转化率均为 0 或 1，无法检验")
+    z = diff / se_pooled
+    p = 2 * (1 - stats.norm.cdf(abs(z)))
+    # 差值置信区间用非合并标准误（更保守、惯例做法）
+    se_diff = math.sqrt(pa * (1 - pa) / na + pb * (1 - pb) / nb)
+    zc = _z_crit(True, float(params.get("alpha", ALPHA)))
+    lo, hi = diff - zc * se_diff, diff + zc * se_diff
+    rel = diff / pa if pa > 0 else None
+    return {
+        "tests": [{"name": "两比例 z 检验", "stat": round(float(z), 4), **_conclusion(float(p))}],
+        "desc_columns": ["组", "样本数", "转化数", "转化率"],
+        "desc": [
+            [label_a, int(na), int(sa), f"{pa * 100:.2f}%"],
+            [label_b, int(nb), int(sb), f"{pb * 100:.2f}%"],
+        ],
+        "rate_a": round(pa, 6), "rate_b": round(pb, 6),
+        "diff": round(diff, 6),
+        "diff_ci95": [round(lo, 6), round(hi, 6)],
+        "relative_lift": None if rel is None else round(rel, 6),
+        "note": (
+            f"转化率 {label_a} {pa * 100:.2f}% → {label_b} {pb * 100:.2f}%，"
+            f"绝对差 {(diff * 100):+.2f}pp" + (f"，相对提升 {(rel * 100):+.1f}%" if rel is not None else "")
+            + f"；差值 95% CI [{lo * 100:.2f}%, {hi * 100:.2f}%]"
+            + ("（区间不含 0，与 p 值结论一致）" if (lo > 0 or hi < 0) else "")
+        ),
+    }
+
+
+def sample_size(df: pd.DataFrame | None, params: dict) -> dict:
+    """A/B 样本量计算：基线转化率 + 最小可检测效应（MDE）→ 每组所需样本数。"""
+    baseline = float(params.get("baseline", 0))
+    mde = float(params.get("mde", 0))
+    relative = bool(params.get("relative", False))
+    alpha = float(params.get("alpha", ALPHA))
+    power = float(params.get("power", 0.8))
+    if not (0 < baseline < 1):
+        raise TestError("基线转化率需在 (0,1) 之间，如填 0.10 表示 10%")
+    if relative:
+        if not (-1 < mde and mde != 0):
+            raise TestError("相对 MDE 需非零且大于 -100%")
+        delta = baseline * mde
+    else:
+        delta = mde
+    p2 = baseline + delta
+    if not (0 < p2 < 1):
+        raise TestError(f"目标转化率 {p2:.4f} 超出 (0,1)，请检查 MDE 方向与大小")
+    if not (0 < alpha < 1 and 0 < power < 1):
+        raise TestError("alpha 与 power 需在 (0,1) 之间")
+    za = _z_crit(True, alpha)
+    zb = float(stats.norm.ppf(power))
+    p_bar = (baseline + p2) / 2
+    n = ((za * math.sqrt(2 * p_bar * (1 - p_bar)) + zb * math.sqrt(baseline * (1 - baseline) + p2 * (1 - p2))) ** 2
+         / delta ** 2)
+    n = math.ceil(n)
+    days_1k = math.ceil(n * 2 / 1000) if n * 2 > 1000 else 1
+    return {
+        "tests": [],
+        "desc_columns": ["参数", "值"],
+        "desc": [
+            ["基线转化率", f"{baseline * 100:.2f}%"],
+            ["目标转化率", f"{p2 * 100:.2f}%"],
+            ["绝对 MDE", f"{delta * 100:+.2f}pp"],
+            ["相对提升", f"{(delta / baseline) * 100:+.1f}%"],
+            ["显著性水平 α（双尾）", alpha],
+            ["统计效能 1-β", power],
+            ["每组所需样本数", n],
+            ["两组合计", n * 2],
+        ],
+        "n_per_group": n,
+        "note": f"按双尾 α={alpha}、效能 {power:.0%} 估算，每组至少 {n} 个样本；"
+                f"若每组每天新增 1000 用户，约需 {days_1k} 天跑完实验（正态近似公式，转化率很小时建议改用精确检验）",
+    }
+
+
+TESTS.update({"prop_z": prop_z_test, "sample_size": sample_size})
