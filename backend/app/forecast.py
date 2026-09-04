@@ -5,7 +5,7 @@
 import numpy as np
 import pandas as pd
 
-from .analysis import AnalysisError, FREQ_MAP, FREQ_LABEL, _resample_series
+from .analysis import FREQ_LABEL, FREQ_MAP, AnalysisError, _resample_series
 
 SEASON_M = {"D": 7, "W": 4, "M": 12, "Q": 4, "Y": 1}
 

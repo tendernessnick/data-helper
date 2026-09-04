@@ -14,7 +14,7 @@ else:
 
 if _frozen:
     # onefile 模式下静态资源解压在 _MEIPASS
-    FRONTEND_DIR = Path(getattr(sys, "_MEIPASS")) / "frontend"
+    FRONTEND_DIR = Path(sys._MEIPASS) / "frontend"
 else:
     FRONTEND_DIR = Path(__file__).resolve().parents[2] / "frontend"
 

@@ -1,0 +1,16 @@
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+extend-exclude = ["frontend/vendor", "build", "dist"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B"]
+ignore = [
+    "E501", # 行宽不强制（中文注释与长 URL 较多）
+    "B008", # FastAPI 的 File(...)/Query(...) 依赖注入写在参数默认值是框架惯例
+    "B904", # except 中 raise HTTPException(400, ...) 转译异常不强制 from
+    "B905", # zip 不强制显式 strict
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

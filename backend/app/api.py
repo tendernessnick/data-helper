@@ -4,24 +4,26 @@ from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from . import analysis
-from . import ai
-from . import cleaning
+from . import (
+    ai,
+    analysis,
+    cleaning,
+    datafeed,
+    deepprofile,
+    exporter,
+    finance,
+    sqlquery,
+    stats_tests,
+    storage,
+    transform,
+)
 from . import compare as compare_mod
-from . import datafeed
-from . import finance
-from . import deepprofile
-from . import exporter
 from . import forecast as forecast_mod
 from . import insights as insights_mod
 from . import profile as prof
 from . import report as report_mod
 from . import sample as sample_mod
-from . import sqlquery
-from . import stats_tests
-from . import storage
 from . import suggest as suggest_mod
-from . import transform
 from .serialize import rows_payload
 from .storage import DatasetNotFound
 
@@ -520,7 +522,7 @@ def ai_chart(body: AiChartBody):
             result = forecast_mod.forecast(df, params)
         else:
             result = analysis.run(df, kind, params)
-    except (analysis.AnalysisError,) as e:
+    except analysis.AnalysisError as e:
         raise HTTPException(400, f"AI 配置执行失败（{spec.get('title', kind)}）：{e}")
     result["ai_spec"] = {"title": str(spec.get("title", "AI 图表"))[:40], "prompt": body.prompt[:120]}
     return result
@@ -551,7 +553,7 @@ def finance_metrics(ds_id: str, body: FinanceMetricsBody):
 
 
 @router.post("/datasets/{ds_id}/finance/kline")
-def finance_kline(ds_id: str, body: dict = {}):
+def finance_kline(ds_id: str, body: dict | None = None):
     df = _load(ds_id)
     try:
         return finance.kline_payload(df, body or {})

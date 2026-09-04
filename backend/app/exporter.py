@@ -1,5 +1,4 @@
 """导出数据为 CSV / XLSX 文件。"""
-import unicodedata
 from pathlib import Path
 
 import pandas as pd

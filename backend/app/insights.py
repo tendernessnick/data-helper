@@ -31,7 +31,6 @@ def _detect_date_col(df: pd.DataFrame):
 def quality_score(df: pd.DataFrame, insights: dict) -> dict:
     """数据质量评分（0-100）：加权扣分制，输出分数、等级与扣分明细。"""
     n = max(len(df), 1)
-    m = max(df.shape[1], 1)
     score = 100.0
     deductions = []
 

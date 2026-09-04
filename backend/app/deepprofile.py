@@ -69,6 +69,7 @@ def duplicates_detail(df: pd.DataFrame, max_rows: int = 100) -> dict:
     return {
         "total_dup_rows": int(len(dup_df)),
         "total_extra": int(df.duplicated().sum()),
+        "groups": groups,
         "columns": [{"name": str(c), "numeric": pd.api.types.is_numeric_dtype(df[c])} for c in df.columns],
         "rows": rows,
         "note": f"共 {len(dup_df)} 行参与重复（含 {df.duplicated().sum()} 行冗余），显示前 {min(max_rows, len(dup_df))} 行",

@@ -195,7 +195,7 @@ def test_regression_stratified_keeps_group_column():
     csv = "g,v\n" + "\n".join(f"A,{i}" for i in range(10)) + "\n" + "\n".join(f"B,{i}" for i in range(10)) + "\n"
     r = client.post("/api/upload", files={"file": ("s.csv", csv.encode(), "text/csv")}, data={"name": ""})
     ds = r.json()["id"]
-    rr = client.post(f"/api/datasets/{ds}/clean", json={"op": "filter_rows", "params": {"column": "v", "op": "ge", "value": 0}})
+    client.post(f"/api/datasets/{ds}/clean", json={"op": "filter_rows", "params": {"column": "v", "op": "ge", "value": 0}})
     rr2 = client.post(f"/api/datasets/{ds}/sample-create", json={"method": "stratified", "n": 2, "by": "g"})
     assert rr2.status_code == 200
     cols = [c["name"] for c in rr2.json()["meta"]["columns"]]

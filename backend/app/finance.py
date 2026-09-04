@@ -243,9 +243,9 @@ def add_kdj(df: pd.DataFrame, ohlcv: dict, n=9, m1=3, m2=3) -> pd.DataFrame:
 
 def add_atr(df: pd.DataFrame, ohlcv: dict, n=14) -> pd.DataFrame:
     out = df.copy()
-    h, l, c = out[ohlcv["high"]], out[ohlcv["low"]], out[ohlcv["close"]]
-    prev_c = c.shift(1)
-    tr = pd.concat([h - l, (h - prev_c).abs(), (l - prev_c).abs()], axis=1).max(axis=1)
+    hi, lo, cl = out[ohlcv["high"]], out[ohlcv["low"]], out[ohlcv["close"]]
+    prev_c = cl.shift(1)
+    tr = pd.concat([hi - lo, (hi - prev_c).abs(), (lo - prev_c).abs()], axis=1).max(axis=1)
     out[_mk_col(ohlcv["close"], f"ATR{n}")] = tr.ewm(alpha=1 / n, adjust=False).mean().round(4)
     return out
 
@@ -282,7 +282,7 @@ def apply_tech_indicator(df: pd.DataFrame, params: dict):
         msg = f"生成 {close_col}_EMA{n}"
     elif indicator == "macd":
         out = add_macd(df, close_col)
-        msg = f"生成 DIF / DEA / MACD 三列（12,26,9）"
+        msg = "生成 DIF / DEA / MACD 三列（12,26,9）"
     elif indicator == "rsi":
         n = int(params.get("n", 14))
         out = add_rsi(df, close_col, n)
@@ -320,11 +320,11 @@ def kline_payload(df: pd.DataFrame, params: dict) -> dict:
     dates = [str(d)[:10] for d in tmp["__date"]]
     o = pd.to_numeric(tmp[ohlcv["open"]], errors="coerce")
     h = pd.to_numeric(tmp[ohlcv["high"]], errors="coerce")
-    l = pd.to_numeric(tmp[ohlcv["low"]], errors="coerce")
+    lo = pd.to_numeric(tmp[ohlcv["low"]], errors="coerce")
     c = pd.to_numeric(tmp[ohlcv["close"]], errors="coerce")
     v = pd.to_numeric(tmp[ohlcv["volume"]], errors="coerce") if "volume" in ohlcv else None
     kdata = [[round(float(a), 4), round(float(b), 4), round(float(d), 4), round(float(e), 4)]
-             for a, b, d, e in zip(o, c, l, h)]
+             for a, b, d, e in zip(o, c, lo, h)]
     ma_lines = {}
     for n in (5, 10, 20, 60):
         ma_lines[f"MA{n}"] = [None if pd.isna(x) else round(float(x), 4) for x in c.rolling(n).mean()]
@@ -362,7 +362,6 @@ def benchmark_compare(df: pd.DataFrame, bdf: pd.DataFrame, params: dict) -> dict
     bdate_col = params.get("bdate") or bohlcv.get("date", "")
     if not date_col or not bdate_col:
         raise FinanceError("资产与基准都需要日期列用于对齐")
-    rf_daily = float(params.get("rf", 0.02)) / TRADING_DAYS
 
     ra = _returns_by_date(df, close_col, date_col)
     rb = _returns_by_date(bdf, bclose_col, bdate_col)
@@ -596,7 +595,7 @@ def ljung_box_test(df: pd.DataFrame, params: dict) -> dict:
     lags_in = params.get("lags", [1, 5, 10, 20])
     if isinstance(lags_in, int):
         lags_in = [lags_in]
-    lags = sorted({int(l) for l in lags_in if 1 <= int(l) <= min(30, n // 3)})
+    lags = sorted({int(lag) for lag in lags_in if 1 <= int(lag) <= min(30, n // 3)})
     if not lags:
         raise FinanceError("滞后阶无效")
 

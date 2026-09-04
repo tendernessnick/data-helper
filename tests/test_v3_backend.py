@@ -1,5 +1,4 @@
 """增强版：SQL 控制台 / 深度画像 / 统计检验 / 预测 / 列变换 / 对比 / 采样 / 图表推荐。"""
-import random
 from datetime import date, timedelta
 
 import numpy as np

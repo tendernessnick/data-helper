@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .insights import run_insights, _detect_date_col
+from .insights import _detect_date_col, run_insights
 from .paths import EXPORT_DIR, FRONTEND_DIR
 
 BASE_COLORS = ["#2563eb", "#16a34a", "#d97706", "#dc2626", "#7e22ce", "#0891b2"]

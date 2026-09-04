@@ -94,7 +94,7 @@ def test_tech_indicator_needs_columns():
     df = pd.DataFrame({"日期": ["2025-01-01"], "收盘": [1.0]})
     try:
         finance.apply_tech_indicator(df, {"indicator": "kdj"})
-        assert False, "应抛错"
+        raise AssertionError("应抛错")
     except finance.FinanceError as e:
         assert "最高价" in str(e)
 
@@ -157,7 +157,7 @@ def test_portfolio_needs_two():
     df = make_stock_df(60)
     try:
         finance.portfolio_analysis([{"name": "A", "df": df}], {})
-        assert False
+        raise AssertionError
     except finance.FinanceError:
         pass
 
@@ -245,6 +245,7 @@ def test_finance_benchmark_and_portfolio_api():
 
 def test_datafeed_mock_and_errors():
     from unittest import mock
+
     from backend.app import datafeed as df_mod
 
     # 未安装 akshare 模拟：让 _import_ak 抛 ImportError

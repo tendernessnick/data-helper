@@ -294,7 +294,7 @@ def rfm(df: pd.DataFrame, params: dict) -> dict:
     id_col = params.get("id_column", "")
     date_col = params.get("date_column", "")
     value_col = params.get("value_column", "")
-    for c, label in ((id_col, "客户/主体列"), (date_col, "日期列"), (value_col, "金额列")):
+    for c, _label in ((id_col, "客户/主体列"), (date_col, "日期列"), (value_col, "金额列")):
         if c:
             _check(df, c)
     if not (id_col and date_col and value_col):

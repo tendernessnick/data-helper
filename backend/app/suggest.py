@@ -1,7 +1,7 @@
 """自动图表推荐（Tableau "Show Me" 思路）：根据列类型组合推荐一键可视化。"""
 import pandas as pd
 
-from .analysis import _resample_series, outlier_bounds
+from .analysis import AnalysisError, outlier_bounds
 
 
 def _num_cols(df):

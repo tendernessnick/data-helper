@@ -5,8 +5,6 @@
 """
 import pandas as pd
 
-from .finance import COLUMN_ALIASES
-
 # 常用指数（akshare index_zh_a_hist 的 symbol）
 INDEX_SOURCES = [
     {"symbol": "000001", "name": "上证指数"},

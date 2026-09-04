@@ -1,5 +1,5 @@
 """阶段10（D包）：一键本地洞察 / HTML 报告。"""
-from datetime import date, timedelta
+from datetime import date
 
 import pandas as pd
 from fastapi.testclient import TestClient

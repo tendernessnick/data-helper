@@ -34,8 +34,8 @@ def make_rfm_df():
         "客户乙": (3, 100, 300),  # 3笔、很早、单笔100
         "客户丙": (12, 300, 60),  # 12笔、较近
     }
-    for cust, (n, amount, days_ago) in plans.items():
-        for i in range(n):
+    for cust, (n, amount, _days_ago) in plans.items():
+        for _ in range(n):
             rows.append(
                 {
                     "客户": cust,

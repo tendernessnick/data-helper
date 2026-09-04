@@ -2,8 +2,6 @@
 import pandas as pd
 from scipy import stats
 
-from .cleaning import CleanError
-
 ALPHA = 0.05
 
 

@@ -1,5 +1,4 @@
 """阶段3：统计分析 / 导出。"""
-import pandas as pd
 from fastapi.testclient import TestClient
 
 from backend.app.main import app
