@@ -1,0 +1,76 @@
+{
+ "columns": [
+  {
+   "name": "国家",
+   "numeric": false
+  },
+  {
+   "name": "订单数",
+   "numeric": true
+  },
+  {
+   "name": "销售额",
+   "numeric": true
+  },
+  {
+   "name": "退货额",
+   "numeric": true
+  }
+ ],
+ "rows": [
+  [
+   "United Kingdom",
+   40505,
+   14723148.0,
+   916724.0
+  ],
+  [
+   "EIRE",
+   727,
+   621631.0,
+   43129.0
+  ],
+  [
+   "Netherlands",
+   250,
+   554232.0,
+   5707.0
+  ],
+  [
+   "Germany",
+   1095,
+   431262.0,
+   13274.0
+  ],
+  [
+   "France",
+   738,
+   355257.0,
+   28753.0
+  ]
+ ],
+ "total": 5,
+ "truncated": false,
+ "aliases": [
+  {
+   "alias": "ds1",
+   "id": "20260904102715-e55630",
+   "name": "客户生命周期事件"
+  },
+  {
+   "alias": "ds2",
+   "id": "20260904102713-e91e4a",
+   "name": "客户RFM指标"
+  },
+  {
+   "alias": "ds3",
+   "id": "20260904102709-a6847b",
+   "name": "有效销售明细"
+  },
+  {
+   "alias": "ds4",
+   "id": "20260904102705-8bba56",
+   "name": "online_retail_ii"
+  }
+ ]
+}

@@ -1,0 +1,47 @@
+{
+ "columns": [
+  {
+   "name": "订单数",
+   "numeric": true
+  },
+  {
+   "name": "客单价",
+   "numeric": true
+  },
+  {
+   "name": "头部10pct客户金额占比pct",
+   "numeric": true
+  }
+ ],
+ "rows": [
+  [
+   36969,
+   479.95,
+   63.9
+  ]
+ ],
+ "total": 1,
+ "truncated": false,
+ "aliases": [
+  {
+   "alias": "ds1",
+   "id": "20260904102715-e55630",
+   "name": "客户生命周期事件"
+  },
+  {
+   "alias": "ds2",
+   "id": "20260904102713-e91e4a",
+   "name": "客户RFM指标"
+  },
+  {
+   "alias": "ds3",
+   "id": "20260904102709-a6847b",
+   "name": "有效销售明细"
+  },
+  {
+   "alias": "ds4",
+   "id": "20260904102705-8bba56",
+   "name": "online_retail_ii"
+  }
+ ]
+}

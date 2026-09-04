@@ -1,0 +1,47 @@
+{
+ "columns": [
+  {
+   "name": "退货行占比pct",
+   "numeric": true
+  },
+  {
+   "name": "退货金额k",
+   "numeric": true
+  },
+  {
+   "name": "客户数",
+   "numeric": true
+  }
+ ],
+ "rows": [
+  [
+   2.27,
+   1095.1,
+   5942
+  ]
+ ],
+ "total": 1,
+ "truncated": false,
+ "aliases": [
+  {
+   "alias": "ds1",
+   "id": "20260904102715-e55630",
+   "name": "客户生命周期事件"
+  },
+  {
+   "alias": "ds2",
+   "id": "20260904102713-e91e4a",
+   "name": "客户RFM指标"
+  },
+  {
+   "alias": "ds3",
+   "id": "20260904102709-a6847b",
+   "name": "有效销售明细"
+  },
+  {
+   "alias": "ds4",
+   "id": "20260904102705-8bba56",
+   "name": "online_retail_ii"
+  }
+ ]
+}

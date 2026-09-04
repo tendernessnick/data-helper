@@ -63,18 +63,17 @@ def run_sql(query: str, datasets: list, current_id: str = "") -> dict:
     from .serialize import cell
 
     total = len(df)
-    truncated = total > MAX_ROWS
-    if truncated:
-        df = df.head(MAX_ROWS)
-    logger.info("SQL 执行完成 rows=%d truncated=%s query=%.80s", total, truncated, q)
+    # 预览行数封顶（前端表格展示用）；完整结果通过 result["df"] 交给调用方（如 SQL 建集）
+    preview = df if total <= MAX_ROWS else df.head(MAX_ROWS)
+    logger.info("SQL 执行完成 rows=%d truncated=%s query=%.80s", total, total > MAX_ROWS, q)
     return {
         "columns": [
-            {"name": str(c), "numeric": pd.api.types.is_numeric_dtype(df[c])}
-            for c in df.columns
+            {"name": str(c), "numeric": pd.api.types.is_numeric_dtype(preview[c])}
+            for c in preview.columns
         ],
-        "rows": [[cell(v) for v in row] for row in df.itertuples(index=False, name=None)],
+        "rows": [[cell(v) for v in row] for row in preview.itertuples(index=False, name=None)],
         "total": total,
-        "truncated": truncated,
+        "truncated": total > MAX_ROWS,
         "aliases": aliases,
         "df": df,
     }

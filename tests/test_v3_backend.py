@@ -320,3 +320,22 @@ def test_quality_score_in_insights():
     assert 0 <= qs["score"] <= 100
     assert qs["level"] in ("优秀", "良好", "一般", "较差")
     assert qs["color"].startswith("#")
+
+
+def test_sql_save_as_not_truncated_by_preview_cap(monkeypatch):
+    """回归：SQL 建集保存完整结果，预览行数封顶只影响响应里的 rows。"""
+    from backend.app import sqlquery as sq
+
+    big = pd.DataFrame({"v": range(37)})
+    monkeypatch.setattr(sq, "MAX_ROWS", 10)
+    ds = upload_df(big, "big.csv")
+    r = client.post("/api/sql", json={"query": f"SELECT v FROM {_alias_of(ds)} WHERE v >= 0", "save_as": "全量建集"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["total"] == 37 and body["truncated"] is True
+    assert len(body["rows"]) == 10  # 预览封顶
+    assert body["new_dataset"]["meta"]["rows"] == 37  # 建集不截断
+
+
+def _alias_of(ds_id: str) -> str:
+    return next(t["alias"] for t in client.get("/api/sql/tables").json() if t["id"] == ds_id)
