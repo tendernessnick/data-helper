@@ -5,10 +5,14 @@
 - 未配置时主流程完全不受影响
 """
 import json
+import logging
+import time
 
 import requests
 
 from .paths import CONFIG_PATH
+
+logger = logging.getLogger(__name__)
 
 TIMEOUT_SECONDS = 90
 
@@ -61,13 +65,16 @@ def chart_spec(messages: list, context: str, timeout: int = TIMEOUT_SECONDS) -> 
         {"role": "user", "content": user_text},
     ]
     try:
+        t0 = time.monotonic()
         resp = requests.post(
             url,
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             json={"model": model, "messages": payload_messages, "temperature": 0.1},
             timeout=timeout,
         )
+        logger.info("AI 出图请求完成 model=%s 耗时=%.1fs", model, time.monotonic() - t0)
     except requests.RequestException as e:
+        logger.warning("AI 出图请求失败：%s", e)
         raise ValueError(f"无法连接模型服务：{e}")
     if resp.status_code != 200:
         raise ValueError(f"模型服务返回 {resp.status_code}：{resp.text[:200]}")
@@ -106,27 +113,47 @@ def load_config() -> dict:
             cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
             if isinstance(cfg, dict):
                 return cfg
-        except (json.JSONDecodeError, OSError):
-            pass
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning("AI 配置文件解析失败，按未配置处理：%s", e)
     return {}
+
+
+def mask_key(key: str) -> str:
+    """密钥掩码：只留前 3 后 4，避免明文回传前端。"""
+    if not key:
+        return ""
+    if len(key) <= 8:
+        return "****"
+    return key[:3] + "****" + key[-4:]
 
 
 def save_config(cfg: dict) -> dict:
     merged = load_config()
-    merged.update({k: v for k, v in cfg.items() if k in ("api_key", "base_url", "model")})
+    updates = {k: v for k, v in cfg.items() if k in ("api_key", "base_url", "model")}
+    new_key = (updates.get("api_key") or "").strip()
+    if "****" in new_key:
+        # 前端回显的掩码值（sk-***xxxx）：视为"不修改密钥"
+        updates.pop("api_key", None)
+    else:
+        # 空字符串 = 清除密钥（断开连接）；非空 = 设置新密钥
+        updates["api_key"] = new_key
+    merged.update(updates)
     CONFIG_PATH.write_text(
         json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+    logger.info("AI 配置已更新（字段：%s）", ", ".join(updates) or "无")
     return merged
 
 
 def public_config() -> dict:
     cfg = load_config()
+    key = cfg.get("api_key", "")
     return {
-        "api_key": cfg.get("api_key", ""),
+        "api_key": mask_key(key),
+        "has_key": bool(key),
         "base_url": cfg.get("base_url", ""),
         "model": cfg.get("model", ""),
-        "configured": bool(cfg.get("api_key") and cfg.get("base_url") and cfg.get("model")),
+        "configured": bool(key and cfg.get("base_url") and cfg.get("model")),
     }
 
 
@@ -165,13 +192,16 @@ def chat(messages: list, context: str, timeout: int = TIMEOUT_SECONDS) -> str:
         if m.get("role") in ("user", "assistant") and m.get("content")
     ]
     try:
+        t0 = time.monotonic()
         resp = requests.post(
             url,
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             json={"model": model, "messages": payload_messages, "temperature": 0.3},
             timeout=timeout,
         )
+        logger.info("AI 对话请求完成 model=%s 耗时=%.1fs", model, time.monotonic() - t0)
     except requests.RequestException as e:
+        logger.warning("AI 对话请求失败：%s", e)
         raise ValueError(f"无法连接模型服务：{e}")
     if resp.status_code != 200:
         detail = ""

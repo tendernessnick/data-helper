@@ -4,18 +4,15 @@
 - 当前数据集额外注册为 df，方便快速引用
 - 仅允许 SELECT / WITH 开头的查询；结果超过上限自动截断
 """
+import logging
 import re
 
 import duckdb
 import pandas as pd
 
-MAX_ROWS = 100_000
+logger = logging.getLogger(__name__)
 
-# 修改类语句的关键字（用于第二级检查：分号后拼第二条语句）
-_FORBIDDEN = re.compile(
-    r"\b(insert|update|delete|create|drop|alter|attach|detach|copy|export|import|pragma|set|call|vacuum|checkpoint)\b",
-    re.IGNORECASE,
-)
+MAX_ROWS = 100_000
 
 
 class SqlError(ValueError):
@@ -71,6 +68,7 @@ def run_sql(query: str, datasets: list, current_id: str = "") -> dict:
     truncated = total > MAX_ROWS
     if truncated:
         df = df.head(MAX_ROWS)
+    logger.info("SQL 执行完成 rows=%d truncated=%s query=%.80s", total, truncated, q)
     return {
         "columns": [
             {"name": str(c), "numeric": pd.api.types.is_numeric_dtype(df[c])}

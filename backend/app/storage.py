@@ -7,6 +7,7 @@
 """
 import io
 import json
+import logging
 import threading
 import uuid
 from datetime import datetime
@@ -15,6 +16,8 @@ from pathlib import Path
 import pandas as pd
 
 from .paths import DATA_DIR
+
+logger = logging.getLogger(__name__)
 
 DATASETS_DIR = DATA_DIR / "datasets"
 DATASETS_DIR.mkdir(parents=True, exist_ok=True)
@@ -143,6 +146,7 @@ def create_dataset(name, df: pd.DataFrame, original_filename: str, original_byte
             ],
         }
         _write_meta(d, meta)
+    logger.info("数据集已创建 id=%s name=%s rows=%d cols=%d", ds_id, meta["name"], meta["rows"], meta["cols"])
     return ds_id
 
 
@@ -166,7 +170,8 @@ def list_datasets() -> list:
             if d.is_dir() and (d / "meta.json").exists():
                 try:
                     out.append(_read_meta(d))
-                except (json.JSONDecodeError, OSError):
+                except (json.JSONDecodeError, OSError) as e:
+                    logger.warning("跳过损坏的数据集目录 %s：%s", d.name, e)
                     continue
     out.sort(key=lambda m: (m.get("updated_at", ""), m.get("id", "")), reverse=True)
     return out
@@ -247,6 +252,7 @@ def delete_dataset(ds_id: str) -> None:
         import shutil
 
         shutil.rmtree(_ds_dir(ds_id))
+    logger.info("数据集已删除 id=%s", ds_id)
 
 
 def reset_dataset(ds_id: str) -> dict:

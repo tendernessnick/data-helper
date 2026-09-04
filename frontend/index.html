@@ -1216,7 +1216,7 @@
           <input type="text" v-model="aiSettings.model" placeholder="glm-4.5-flash">
         </div>
         <div class="field"><label>API Key</label>
-          <input type="password" v-model="aiSettings.api_key" placeholder="sk-...">
+          <input type="password" v-model="aiSettings.api_key" :placeholder="aiSettings.has_key ? '已保存 ' + aiSettings.api_key + '，输入新 Key 可更换' : 'sk-...'">
         </div>
         <div class="hint" v-if="aiConfigured" style="color:var(--green)">● 当前已连接：<b>{{ aiSettings.model }}</b></div>
       </div>

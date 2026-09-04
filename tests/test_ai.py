@@ -35,6 +35,25 @@ def test_settings_roundtrip():
     assert r3.json()["configured"] is False
 
 
+def test_settings_key_masked_and_kept():
+    """GET 不回传明文 key；把掩码值原样 PUT 回去不会破坏已保存的密钥。"""
+    client.put(
+        "/api/ai/settings",
+        json={"api_key": "sk-secret-1234567890", "base_url": "https://example.com/v4", "model": "glm-test"},
+    )
+    got = client.get("/api/ai/settings").json()
+    assert got["has_key"] is True
+    assert "sk-secret-1234567890" not in got["api_key"]
+    assert got["api_key"].startswith("sk-") and "****" in got["api_key"]
+    # 掩码值回传 → 保留原 key，连接状态不变
+    kept = client.put(
+        "/api/ai/settings",
+        json={"api_key": got["api_key"], "base_url": "https://example.com/v4", "model": "glm-test"},
+    ).json()
+    assert kept["configured"] is True
+    client.put("/api/ai/settings", json={"api_key": "", "base_url": "", "model": ""})
+
+
 def test_chat_without_config_400():
     ds = _upload()
     r = client.post(

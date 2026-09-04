@@ -1,3 +1,13 @@
--r requirements.txt
+# 数据分析小助手 核心依赖
+# Python >= 3.12；金融在线行情依赖 akshare，本地 AI 调用依赖 requests
+fastapi>=0.115
+uvicorn>=0.30
+pandas>=3.0
+numpy>=2.0
 scipy>=1.14
 duckdb>=1.0
+pyarrow>=17.0
+openpyxl>=3.1
+requests>=2.32
+python-multipart>=0.0.9
+akshare>=1.14
