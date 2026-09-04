@@ -9,8 +9,6 @@ import pandas as pd
 from .insights import _detect_date_col, run_insights
 from .paths import EXPORT_DIR, FRONTEND_DIR
 
-BASE_COLORS = ["#2563eb", "#16a34a", "#d97706", "#dc2626", "#7e22ce", "#0891b2"]
-
 
 def _esc(s) -> str:
     return (
@@ -24,6 +22,8 @@ def _esc(s) -> str:
 
 def _num(x, nd=2):
     if x is None:
+        return "—"
+    if isinstance(x, float) and (np.isnan(x) or np.isinf(x)):
         return "—"
     return f"{x:,.{nd}f}".rstrip("0").rstrip(".") if isinstance(x, (int, float)) else str(x)
 
@@ -157,16 +157,16 @@ def build_report_html(meta: dict, df: pd.DataFrame, insights: dict) -> str:
         f"<div class='kcard'>内存占用<b>{ov['mem_mb']} MB</b></div>"
         "</div>"
     )
-    # 要点
+    # 要点（alerts 内嵌用户列名/单元格值，必须转义：报告定位是直接分享给同事）
     parts.append("<h2>🔎 关键发现</h2><ul class='alerts'>")
     for a in insights["alerts"]:
-        parts.append(f"<li>{a}</li>")
+        parts.append(f"<li>{_esc(str(a))}</li>")
     parts.append("</ul>")
     # 质量
     if insights["quality"]:
         parts.append("<h2>🧪 数据质量</h2><ul class='qlist'>")
         for q in insights["quality"]:
-            parts.append(f"<li class='{q['level']}'>• {q['msg']}</li>")
+            parts.append(f"<li class='{_esc(str(q['level']))}'>• {_esc(str(q['msg']))}</li>")
         parts.append("</ul>")
     # 数值列
     if insights["numeric"]:
@@ -221,8 +221,9 @@ def build_report_html(meta: dict, df: pd.DataFrame, insights: dict) -> str:
 def save_report(meta: dict, df: pd.DataFrame) -> Path:
     insights = run_insights(df, meta)
     html = build_report_html(meta, df, insights)
-    name = "".join("-" if ch in '<>:"/\\|?*' else ch for ch in (meta.get("name") or "数据集"))[:50]
+    from .exporter import _safe_name
+
     EXPORT_DIR.mkdir(parents=True, exist_ok=True)
-    path = EXPORT_DIR / f"{name}_分析报告.html"
+    path = EXPORT_DIR / f"{_safe_name(meta.get('name') or '数据集')}_分析报告.html"
     path.write_text(html, encoding="utf-8")
     return path

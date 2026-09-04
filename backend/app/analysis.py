@@ -59,6 +59,7 @@ def describe(df: pd.DataFrame, params: dict) -> dict:
 def groupby(df: pd.DataFrame, params: dict) -> dict:
     by = params.get("by") or []
     metrics = params.get("metrics") or []
+    top = params.get("top")  # 只返回前 N 组（AI 工具对高基数列防爆炸；界面路径不传保持全量）
     if isinstance(by, str):
         by = [by]
     if not by or not metrics:
@@ -73,8 +74,13 @@ def groupby(df: pd.DataFrame, params: dict) -> dict:
             raise AnalysisError(f"未知聚合方式 {agg}，可选: {', '.join(AGGS)}")
         agg_map.setdefault(col, []).append(agg)
     grouped = df.groupby(by, dropna=False).agg(agg_map)
+    if top:
+        try:
+            grouped = grouped.head(max(1, int(top)))
+        except (TypeError, ValueError):
+            pass
     table = _to_table(grouped)
-    table["note"] = f"按 {', '.join(map(str, by))} 分组聚合"
+    table["note"] = f"按 {', '.join(map(str, by))} 分组聚合" + (f"（前 {int(top)} 组）" if top else "")
     table["chart"] = {"type": "bar", "label_col": by[0]}
     return table
 

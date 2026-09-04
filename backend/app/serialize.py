@@ -16,6 +16,8 @@ def cell(v):
             return None
     except (TypeError, ValueError):
         pass
+    if isinstance(v, np.bool_):
+        return bool(v)  # np.bool_ 不是 Python bool 的实例，漏掉会在 JSON 里变成字符串 "True"
     if isinstance(v, np.integer):
         return int(v)
     if isinstance(v, (np.floating, float)):

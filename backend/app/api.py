@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pandas as pd
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -79,20 +80,26 @@ async def upload(file: UploadFile = File(...), name: str = Form(None), sheet: st
                 spool.write(chunk)
         if size == 0:
             raise HTTPException(400, "上传的文件为空")
-        ext = Path(file.filename or "").suffix.lower()
-        if ext in (".csv", ".txt") and size > storage.STREAM_THRESHOLD_BYTES:
-            ds_id = storage.create_dataset_stream(name, tmp, file.filename or "data.csv")
-        else:
+        filename = file.filename or "data.csv"
+
+        def _build():
+            # 同步重活（xlsx 解析可达数十秒）放线程池，避免阻塞事件循环殃及 SSE 等其他请求
+            ext = Path(filename).suffix.lower()
+            if ext in (".csv", ".txt") and size > storage.STREAM_THRESHOLD_BYTES:
+                return storage.create_dataset_stream(name, tmp, filename)
+            raw = tmp.read_bytes()  # 读一次复用：解析与 original 存档共用
             try:
-                df = storage.parse_upload(file.filename or "", tmp.read_bytes(), sheet_name=sheet)
+                df = storage.parse_upload(filename, raw, sheet_name=sheet)
             except ValueError as e:
                 raise HTTPException(400, str(e))
             except Exception as e:  # 解析器抛出的其他异常（结构错误等）
-                logger.warning("文件解析失败 %s：%s", file.filename, e)
+                logger.warning("文件解析失败 %s：%s", filename, e)
                 raise HTTPException(400, f"文件解析失败：{e}")
-            ds_id = storage.create_dataset(name, df, file.filename or "data.csv", tmp.read_bytes())
+            return storage.create_dataset(name, df, filename, raw)
+
+        ds_id = await run_in_threadpool(_build)
     finally:
-        tmp.unlink(missing_ok=True)  # 流式路径已 move 走，其余情况兜底清理
+        tmp.unlink(missing_ok=True)
     logger.info("上传完成 file=%s size=%.1fMB", file.filename, size / 1048576)
     return {"id": ds_id, "meta": storage.get_meta(ds_id)}
 
@@ -310,16 +317,20 @@ def run_sql(body: SqlBody):
     items = [{"id": m["id"], "name": m["name"], "path": str(storage.current_path(m["id"]))} for m in metas]
     current = body.current_id or (metas[0]["id"] if metas else "")
     try:
-        result = sqlquery.run_sql(body.query, items, current_id=current)
+        result = sqlquery.run_sql(body.query, items, current_id=current, save_as=body.save_as)
     except sqlquery.SqlError as e:
         raise HTTPException(400, str(e))
 
     payload = {k: v for k, v in result.items() if k != "df"}
     if body.save_as:
-        ds_id = storage.create_dataset(body.save_as, result["df"], "SQL查询结果.csv",
-                                       result["df"].to_csv(index=False).encode("utf-8-sig"))
-        storage.save_df(ds_id, result["df"], "SQL建集",
-                        f"{body.query.strip().splitlines()[0][:60]}...（{len(result['df'])} 行）")
+        first_line = body.query.strip().splitlines()[0][:60]
+        # 直接带初始 history 建集：此前 create_dataset+save_df 会把同一 parquet 写两遍
+        # 并多出一份完全相同的撤销快照
+        ds_id = storage.create_dataset(
+            body.save_as, result["df"], "SQL查询结果.csv",
+            result["df"].to_csv(index=False).encode("utf-8-sig"),
+            action="SQL建集", detail=f"{first_line}…（{len(result['df'])} 行）",
+        )
         payload["new_dataset"] = {"id": ds_id, "meta": storage.get_meta(ds_id)}
     return payload
 
@@ -348,7 +359,10 @@ def missing_matrix(ds_id: str):
 @router.get("/datasets/{ds_id}/duplicates")
 def duplicates(ds_id: str):
     df = _load(ds_id)
-    return deepprofile.duplicates_detail(df)
+    try:
+        return deepprofile.duplicates_detail(df)
+    except analysis.AnalysisError as e:  # 含不可哈希单元格（list 列）等
+        raise HTTPException(400, str(e))
 
 
 @router.get("/datasets/{ds_id}/interactions")
@@ -428,7 +442,6 @@ def cluster(ds_id: str, body: ForecastBody):
 
 @router.post("/datasets/{ds_id}/cross-heat")
 def cross_heat(ds_id: str, body: ForecastBody):
-
     df = _load(ds_id)
     try:
         return suggest_mod.cross_heat(df, body.params)
@@ -510,7 +523,7 @@ class ExportTableBody(BaseModel):
 def export_table(body: ExportTableBody):
     try:
         path = exporter.export_table(body.columns, body.rows, body.filename, body.format)
-    except ValueError as e:
+    except (ValueError, KeyError) as e:  # KeyError：前端表格单元格缺键（如区间 dict 缺 lower）
         raise HTTPException(400, str(e))
     return FileResponse(
         path,
@@ -634,7 +647,10 @@ def ai_chart(body: AiChartBody):
 @router.get("/datasets/{ds_id}/finance/detect")
 def finance_detect(ds_id: str):
     df = _load(ds_id)
-    return finance.detect_ohlcv(df)
+    try:
+        return finance.detect_ohlcv(df)
+    except finance.FinanceError as e:
+        raise HTTPException(400, str(e))
 
 
 class FinanceMetricsBody(BaseModel):
@@ -711,17 +727,18 @@ def finance_portfolio(body: PortfolioBody):
     if len(body.assets) < 2:
         raise HTTPException(400, "请至少选择 2 个资产")
     dfs = []
+    for a in body.assets:
+        _meta_or_404(a["id"])  # 数据集不存在统一 404（此前映射 400 且暴露内部异常格式）
+        meta = storage.get_meta(a["id"])
+        dfs.append({
+            "name": meta["name"][:12],
+            "df": storage.load_df(a["id"]),
+            "close": a.get("close", ""),
+            "date": a.get("date", ""),
+        })
     try:
-        for a in body.assets:
-            meta = storage.get_meta(a["id"])
-            dfs.append({
-                "name": meta["name"][:12],
-                "df": storage.load_df(a["id"]),
-                "close": a.get("close", ""),
-                "date": a.get("date", ""),
-            })
         return finance.portfolio_analysis(dfs, {"weights": body.weights, "rf": body.rf})
-    except (finance.FinanceError, DatasetNotFound) as e:
+    except finance.FinanceError as e:
         raise HTTPException(400, str(e))
 
 

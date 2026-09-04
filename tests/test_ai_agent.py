@@ -233,10 +233,9 @@ def test_all_registered_tools_run_locally():
         name = tool["name"]
         params, df_key = TOOL_PARAMS[name]
         df = _tool_df(df_key)
-        card, summary = agent._run_tool(df, {"name": name, "arguments": json.dumps(params), "id": "x"})
+        card, summary, brief = agent._run_tool(df, {"name": name, "arguments": json.dumps(params), "id": "x"})
         assert card is not None, f"工具 {name} 执行失败: {summary}"
-        assert isinstance(summary, dict), name
-        assert card["payload"] is summary or isinstance(card["payload"], dict)
+        assert isinstance(summary, str), name
 
 
 def test_all_tools_have_label_and_card():
@@ -246,10 +245,49 @@ def test_all_tools_have_label_and_card():
 
 
 def test_run_tool_bad_json_and_unknown_name():
-    card, summary = agent._run_tool(pd.DataFrame(), {"name": "groupby", "arguments": "{bad", "id": "x"})
-    assert card is None and "JSON" in summary["error"]
-    card2, summary2 = agent._run_tool(pd.DataFrame(), {"name": "nope", "arguments": "{}", "id": "x"})
-    assert card2 is None and "未知工具" in summary2["error"]
+    card, summary, _ = agent._run_tool(pd.DataFrame(), {"name": "groupby", "arguments": "{bad", "id": "x"})
+    assert card is None and "JSON" in summary
+    card2, summary2, _ = agent._run_tool(pd.DataFrame(), {"name": "nope", "arguments": "{}", "id": "x"})
+    assert card2 is None and "未知工具" in summary2
+
+
+def test_tool_result_event_on_failure(monkeypatch):
+    """P1 回归：工具失败也要发 tool_result(card=None,error)，前端据此撤 spinner。"""
+    monkeypatch.setattr(agent, "load_config", lambda: {"api_key": "k", "base_url": "http://x", "model": "m"})
+    scripted = [
+        FakeResp([chunk(tool_calls=tool_call(name="rfm", arguments='{"id_column": "x", "date_column": "y", "value_column": "z"}')), "data: [DONE]"]),
+        FakeResp([chunk("已处理失败"), "data: [DONE]"]),
+    ]
+    holder = {"i": 0}
+    monkeypatch.setattr(agent, "_post_llm", lambda cfg, payload, timeout: scripted[holder["i"]] or scripted.__setitem__("i", holder["i"] + 1))
+    # 上面的 lambda 有点绕，换成显式函数
+    def fake_post(cfg, payload, timeout):
+        r = scripted[holder["i"]]
+        holder["i"] += 1
+        return r
+    monkeypatch.setattr(agent, "_post_llm", fake_post)
+    events = list(agent.stream_agent("摘要", "分析", DF))
+    tr = [e for e in events if e["type"] == "tool_result"]
+    assert len(tr) == 1 and tr[0]["card"] is None and "执行失败" in tr[0]["error"]
+
+
+def test_tool_card_rows_capped():
+    """P1 回归：高基数结果卡只保留 500 行（防 SSE/前端内存爆炸）。"""
+    big = pd.DataFrame({"g": [f"g{i}" for i in range(800)], "v": list(range(800))})
+    card, summary, _ = agent._run_tool(big, {"name": "value_counts", "arguments": json.dumps({"column": "g", "top": 800}), "id": "x"})
+    assert card is not None
+    assert len(card["payload"]["rows"]) == agent.CARD_MAX_ROWS
+    assert "共 800 行" in card["payload"]["note"]
+    assert len(summary) > 1000  # LLM 仍拿到完整统计
+
+
+def test_groupby_tool_top_param():
+    df = pd.DataFrame({"g": [f"g{i % 30}" for i in range(300)], "v": list(range(300))})
+    from backend.app import analysis
+    out = analysis.groupby(df, {"by": ["g"], "metrics": [{"column": "v", "agg": "sum"}], "top": 5})
+    assert len(out["rows"]) == 5 and "前 5 组" in out["note"]
+    out2 = analysis.groupby(df, {"by": ["g"], "metrics": [{"column": "v", "agg": "sum"}]})
+    assert len(out2["rows"]) == 30  # 不传 top 保持全量（界面路径）
 
 
 def test_max_tool_rounds_guard(monkeypatch):

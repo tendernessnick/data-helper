@@ -26,7 +26,57 @@ def _parquet_view(con, alias: str, path: str) -> None:
     con.execute(f"CREATE OR REPLACE VIEW {alias} AS SELECT * FROM read_parquet({lit})")
 
 
-def run_sql(query: str, datasets: list, current_id: str = "") -> dict:
+def _split_statements(q: str) -> list:
+    """按分号切分语句，但跳过字符串字面量与注释内的分号。
+
+    q.split(";") 会把 WHERE x='a;b' 误判成两条语句而拒绝合法查询。
+    """
+    segs, buf = [], []
+    i, n = 0, len(q)
+    while i < n:
+        ch = q[i]
+        if ch in ("'", '"'):
+            quote = ch
+            buf.append(ch)
+            i += 1
+            while i < n:
+                buf.append(q[i])
+                if q[i] == quote and (i + 1 >= n or q[i + 1] != quote):
+                    i += 1
+                    break
+                if q[i] == quote:  # 转义的引号 '' / ""
+                    i += 1
+                    if i < n:
+                        buf.append(q[i])
+                i += 1
+            continue
+        if ch == "-" and i + 1 < n and q[i + 1] == "-":  # 行注释
+            while i < n and q[i] != "\n":
+                buf.append(q[i])
+                i += 1
+            continue
+        if ch == "/" and i + 1 < n and q[i + 1] == "*":  # 块注释
+            buf.append(q[i])
+            i += 1
+            while i + 1 < n and not (q[i] == "*" and q[i + 1] == "/"):
+                buf.append(q[i])
+                i += 1
+            if i + 1 < n:
+                buf.append(q[i : i + 2])
+                i += 2
+            continue
+        if ch == ";":
+            segs.append("".join(buf))
+            buf = []
+            i += 1
+            continue
+        buf.append(ch)
+        i += 1
+    segs.append("".join(buf))
+    return segs
+
+
+def run_sql(query: str, datasets: list, current_id: str = "", save_as: str = "") -> dict:
     """datasets: [{id, name, path}]，path 指向数据集 current.parquet；current_id 对应的表额外注册为 df。"""
     q = (query or "").strip().rstrip(";")
     if not q:
@@ -35,7 +85,7 @@ def run_sql(query: str, datasets: list, current_id: str = "") -> dict:
     # 1) 语句必须以 SELECT/WITH 开头（覆盖主查询）
     # 2) 分号拼接的每一段都必须是查询（拦截 "SELECT 1; DROP TABLE x"）
     # 不做全文关键字扫描：避免误伤列名/字符串里恰好含 update 等词的合法查询
-    for i, seg in enumerate(q.split(";")):
+    for i, seg in enumerate(_split_statements(q)):
         seg = seg.strip()
         if not seg:
             continue
@@ -53,8 +103,15 @@ def run_sql(query: str, datasets: list, current_id: str = "") -> dict:
                 _parquet_view(con, "df", item["path"])
         if current_id and not any(a["id"] == current_id for a in aliases):
             raise SqlError("当前数据集不在可查询列表中")
-        result = con.execute(q)
-        df = result.df()
+        if save_as:
+            # 建集需要完整结果，只能全量物化（用户显式动作）
+            df = con.execute(q).df()
+        else:
+            # 预览路径：外层包 LIMIT，避免笛卡尔积/巨型聚合把内存打爆
+            try:
+                df = con.execute(f"SELECT * FROM ({q}) AS _preview LIMIT {MAX_ROWS + 1}").df()
+            except duckdb.Error:
+                df = con.execute(q).df()  # 极少数语法不支持子查询包装时回退
     except duckdb.Error as e:
         raise SqlError(f"SQL 执行出错：{e}")
     finally:

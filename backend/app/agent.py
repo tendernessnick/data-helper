@@ -22,6 +22,8 @@ logger = logging.getLogger(__name__)
 
 MAX_TOOL_ROUNDS = 6
 TOOL_MSG_MAX_CHARS = 3500
+CARD_MAX_ROWS = 500
+SESSION_LIMIT = 50  # 内存级会话数上限（LRU），防长驻进程慢泄漏
 
 
 class LlmError(ValueError):
@@ -267,6 +269,10 @@ def session_history(sid: str) -> list:
 def _session_append(sid: str, role: str, content: str) -> None:
     with _SESSION_LOCK:
         lst = _SESSIONS.setdefault(sid, [])
+        if not lst:
+            # 会话数超限时丢弃最久未活跃的（dict 保序：首个即最老）
+            if len(_SESSIONS) > SESSION_LIMIT:
+                _SESSIONS.pop(next(iter(_SESSIONS)), None)
         lst.append({"role": role, "content": content})
         del _SESSIONS[sid][:-_SESSION_MAX_MSGS]
 
@@ -312,9 +318,15 @@ def _iter_sse_json(resp):
         if data == "[DONE]":
             return
         try:
-            yield json.loads(data)
+            chunk = json.loads(data)
         except json.JSONDecodeError:
             continue
+        if isinstance(chunk, dict) and chunk.get("error") and not chunk.get("choices"):
+            # 供应商中途报错（无 choices 的 error 帧）：转成可读异常，不静默吞掉
+            err = chunk["error"]
+            msg = err.get("message") if isinstance(err, dict) else str(err)
+            raise LlmError(f"模型服务流式返回错误：{msg}")
+        yield chunk
 
 
 def _stream_completion(cfg: dict, messages: list, tools: list | None):
@@ -340,8 +352,8 @@ def _stream_completion(cfg: dict, messages: list, tools: list | None):
                 if tc.get("id"):
                     slot["id"] = tc["id"]
                 fn = tc.get("function") or {}
-                if fn.get("name") and fn["name"] not in slot["name"]:
-                    slot["name"] += fn["name"]
+                if fn.get("name"):
+                    slot["name"] = fn["name"]  # 分片重发时整体替换，不做子串拼接
                 if fn.get("arguments"):
                     slot["arguments"] += fn["arguments"]
     finally:
@@ -354,24 +366,25 @@ def _stream_completion(cfg: dict, messages: list, tools: list | None):
 
 
 def _run_tool(df, call: dict):
-    """本地执行一次工具调用。返回 (card, summary_for_llm)。"""
+    """本地执行一次工具调用。返回 (card, summary_str, brief)；失败时 card 为 None。"""
     tool = TOOLS_BY_NAME.get(call["name"])
     if tool is None:
-        return None, {"error": f"未知工具 {call['name']}"}
+        return None, f"未知工具 {call['name']}", ""
     try:
         args = json.loads(call["arguments"] or "{}")
         if not isinstance(args, dict):
             raise ValueError("参数必须是 JSON 对象")
     except json.JSONDecodeError as e:
-        return None, {"error": f"参数不是合法 JSON：{e}"}
+        return None, f"参数不是合法 JSON：{e}", ""
     try:
         result = tool["runner"](df, args)
     except (ValueError, KeyError) as e:
         logger.info("工具 %s 执行失败：%s", call["name"], e)
-        return None, {"error": str(e)}
+        return None, f"执行失败：{e}", ""
     except Exception as e:  # 未预期异常也回给 LLM，让它调整参数重试
         logger.warning("工具 %s 异常：%s", call["name"], e)
-        return None, {"error": f"执行异常：{e}"}
+        return None, f"执行异常：{e}", ""
+    # 先截断再返回：巨大结果在 JSON 化阶段就会撑爆内存，不能等调用方再截
     try:
         summary = json.dumps(result, ensure_ascii=False, default=str)
     except Exception:
@@ -379,8 +392,17 @@ def _run_tool(df, call: dict):
     if len(summary) > TOOL_MSG_MAX_CHARS:
         summary = summary[:TOOL_MSG_MAX_CHARS] + "…（截断）"
     card = dict(tool["card"])
-    card["payload"] = result
-    return card, result
+    payload = result
+    rows = result.get("rows") if isinstance(result, dict) else None
+    if isinstance(rows, list) and len(rows) > CARD_MAX_ROWS:
+        # 卡片只做展示：高基数分组（几十万行）不进 SSE / 前端内存
+        payload = dict(result)
+        total = len(rows)
+        payload["rows"] = rows[:CARD_MAX_ROWS]
+        base_note = str(payload.get("note") or "").strip()
+        payload["note"] = (base_note + "；" if base_note else "") + f"卡片仅显示前 {CARD_MAX_ROWS} 行（共 {total} 行）"
+    card["payload"] = payload
+    return card, summary, _brief(result)
 
 
 def _as_events(sub):
@@ -440,11 +462,12 @@ def stream_agent(context: str, user_message: str, df, sid: str = ""):
                 tool = TOOLS_BY_NAME.get(c["name"])
                 label = tool["label"] if tool else c["name"]
                 yield {"type": "tool_start", "name": c["name"], "label": f"正在执行 {label}…"}
-                card, summary = _run_tool(df, c)
-                if card is not None:
-                    yield {"type": "tool_result", "name": c["name"], "card": card, "summary": _brief(summary)}
-                content_msg = summary if isinstance(summary, str) else json.dumps(summary, ensure_ascii=False, default=str)
-                messages.append({"role": "tool", "tool_call_id": c["id"], "content": content_msg[:TOOL_MSG_MAX_CHARS]})
+                card, summary, brief = _run_tool(df, c)
+                # 失败也发 tool_result（card=None）：前端据此撤掉 spinner 并显示原因
+                yield ({"type": "tool_result", "name": c["name"], "card": card, "summary": brief}
+                       if card is not None else
+                       {"type": "tool_result", "name": c["name"], "card": None, "error": summary})
+                messages.append({"role": "tool", "tool_call_id": c["id"], "content": summary[:TOOL_MSG_MAX_CHARS]})
         else:
             # 轮次耗尽：不再给工具，强制总结
             content, _ = yield from _as_events(_stream_completion(cfg, messages, None))
