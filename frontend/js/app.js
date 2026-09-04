@@ -23,7 +23,7 @@ const app = createApp({
       cards: [],
 
       // 工具坞开合
-      openSec: { cl: false, ana: true, ts: false, biz: false, stat: false, sql: false, cmp: false, feed: false, fin: false, tf: false, ai: false, hist: false },
+      openSec: { cl: false, ana: true, ts: false, biz: false, stat: false, sql: false, cmp: false, feed: false, fin: false, tf: false, hist: false },
 
       // 主题
       theme: "light",
@@ -135,6 +135,18 @@ const app = createApp({
       pasteText: "",
       pasteName: "",
     };
+  },
+
+  watch: {
+    mainView(v) {
+      if (v === "data") {
+        // AI 对话页生成的结果卡在其创建时数据画布未挂载（v-else-if），
+        // 图表从未渲染；切回数据页必须补一次
+        this.$nextTick(() => {
+          (this.cards || []).forEach((c) => { if (c.chartDiv) this.renderCardChart(c); });
+        });
+      }
+    },
   },
 
   computed: {
@@ -327,7 +339,7 @@ const app = createApp({
         const spec = R.ai_spec || {};
         delete R.ai_spec;
         this.addCard({
-          type: R.matrix ? "table" : (R.backtest ? "table" : "table"),
+          type: "table",
           icon: "🤖", title: spec.title || "AI 图表", payload: R, span2: !!R.forecast_meta,
         });
         this.aiMessages.push({ role: "assistant", content: `已生成图表「${spec.title || "AI 图表"}」，见画布卡片。` });
@@ -362,9 +374,10 @@ const app = createApp({
     },
 
     removeCard(card) {
-      if (this._charts && this._charts[card.id]) {
-        this._charts[card.id].dispose();
-        delete this._charts[card.id];
+      if (this._charts) {
+        for (const key of [card.id, card.id + ":deep"]) {  // :deep = 洞察卡下钻图
+          if (this._charts[key]) { this._charts[key].dispose(); delete this._charts[key]; }
+        }
       }
       this.cards = this.cards.filter((c) => c.id !== card.id);
     },
@@ -373,6 +386,12 @@ const app = createApp({
       if (!this._charts) this._charts = {};
       this._cardEls = this._cardEls || {};
       this._cardEls[card.id] = el;
+    },
+
+    setCardDeepEl(card, el) {
+      // 洞察卡的下钻图容器（缺失矩阵）：v-if 挂载后回填，卸载时 el 为 null
+      this._deepEls = this._deepEls || {};
+      this._deepEls[card.id] = el;
     },
 
     renderCardChart(card) {
@@ -746,6 +765,7 @@ const app = createApp({
       this.mainView = "data";
       if (this.currentId === id) return;
       this.currentId = id;
+      const seq = (this._dsSeq = (this._dsSeq || 0) + 1);  // 连点竞态：只认最后一次选择
       this.meta = this.datasets.find((d) => d.id === id) || {};
       this.page = 1;
       this.cards = [];
@@ -754,8 +774,11 @@ const app = createApp({
       this.cleanSel.columns = [];
       this.cleanSel.dropCols = [];
       this.cleanSel.outlierCols = [];
-      await Promise.all([this.loadRows(), this.loadProfile(), this.initDefaults(), this.loadSqlTables(), this.detectFinance(), this.loadFeedIndexes()]);
-      this.meta = await this.api("GET", `/api/datasets/${id}`);
+      await Promise.all([this.loadRows(), this.loadProfile(), this.loadSqlTables(), this.detectFinance(), this.loadFeedIndexes()]);
+      if (seq !== this._dsSeq) return;  // 期间又切了别的数据集：本批结果作废
+      this.initDefaults();  // 必须在 loadProfile 之后：否则默认列取到上一个数据集的列
+      const m = await this.api("GET", `/api/datasets/${id}`);
+      if (seq === this._dsSeq) this.meta = m;
     },
 
     async loadRows() {
@@ -849,6 +872,11 @@ const app = createApp({
       try {
         await this.api("DELETE", `/api/datasets/${this.currentId}`);
         this.currentId = null; this.meta = {}; this.cards = [];
+        Object.values(this._charts || {}).forEach((c) => c && c.dispose());  // 此前漏 dispose：实例随画布重建泄漏
+        this._charts = {};
+        this.suggestions = [];
+        this.aiSessionId = "";  // 旧会话的列结构上下文已过期
+        this.page = 1;
         await this.refreshDatasets();
         this.toast("已删除");
       } catch (e) { this.toast(e.message, "error"); }
@@ -1165,7 +1193,7 @@ const app = createApp({
       catch (e) { this.finDetected = {}; }
       if (this.finDetected.close) {
         const p = this.profile.columns.find((c) => c.name === this.finDetected.close);
-        if (p && p.kind === "numeric" && !this.fin.close) this.fin.close = "";
+
       }
     },
 
@@ -1328,8 +1356,8 @@ const app = createApp({
           card.deepData = await this.api("GET", `/api/datasets/${this.currentId}/missing-matrix`);
           card.deep = "missing";
           await this.$nextTick();
-          // 洞察卡 chartDiv=false，缺失矩阵热力图单独渲染到其深度容器
-          const el = document.querySelector('.card-item .deep-chart');
+          // 洞察卡 chartDiv=false，缺失矩阵热力图单独渲染到「本卡」的深度容器
+          const el = (this._deepEls || {})[card.id];
           if (el) {
             if (!this._charts) this._charts = {};
             if (this._charts[card.id + ':deep']) this._charts[card.id + ':deep'].dispose();
@@ -1390,6 +1418,7 @@ const app = createApp({
         const r = await this.api("POST", `/api/datasets/${this.currentId}/transform`, { code: this.code, apply });
         this.addCard({
           type: "transform", icon: "🐍", span2: true, applied: apply,
+          code: this.code,  // 快照：卡片上的「应用」必须重放生成该预览的代码，而非编辑器当前内容
           title: apply ? "Python 变换（已应用）" : "Python 变换（预览）",
           payload: {
             note: `${r.old_shape.rows} 行 × ${r.old_shape.cols} 列 → ${r.shape.rows} 行 × ${r.shape.cols} 列` +
@@ -1409,7 +1438,7 @@ const app = createApp({
       if (!confirm("把该预览结果应用到数据集？")) return;
       this.busy = true;
       try {
-        const r = await this.api("POST", `/api/datasets/${this.currentId}/transform`, { code: this.code, apply: true });
+        const r = await this.api("POST", `/api/datasets/${this.currentId}/transform`, { code: card.code, apply: true });
         card.applied = true;
         card.title = "Python 变换（已应用）";
         this.toast(`已应用：${r.old_shape.rows} 行 → ${r.shape.rows} 行`);
@@ -1446,14 +1475,14 @@ const app = createApp({
       try {
         const s = await this.api("GET", "/api/ai/settings");
         this.aiSettings = { ...this.aiSettings, ...s };
-        this.aiConfigured = !!(s.api_key && s.base_url && s.model);
+        this.aiConfigured = !!s.configured;  // 后端统一判定（掩码 key 也会被正确识别为已配置）
       } catch (e) { /* 后端未就绪时静默 */ }
     },
 
     async saveAiSettings() {
       try {
         const s = await this.api("PUT", "/api/ai/settings", this.aiSettings);
-        this.aiConfigured = !!(s.api_key && s.base_url && s.model);
+        this.aiConfigured = !!s.configured;
         this.aiSettingsOpen = false;
         this.toast(this.aiConfigured ? "已连接，可以开始提问了" : "已保存（填全 Key / 地址 / 模型后启用）");
       } catch (e) { this.toast(e.message, "error"); }
@@ -1474,7 +1503,7 @@ const app = createApp({
       this.busy = true;
       const ctrl = new AbortController();
       this.aiAbort = ctrl;
-      let assistant = null;
+      let assistant = null, reader = null;
       const ensure = () => {
         if (!assistant) { assistant = { role: "assistant", content: "" }; this.aiMessages.push(assistant); }
         return assistant;
@@ -1486,9 +1515,12 @@ const app = createApp({
           signal: ctrl.signal,
         });
         if (!resp.ok || !resp.body) throw new Error(`流式连接失败（${resp.status}）`);
-        const reader = resp.body.getReader();
+        reader = resp.body.getReader();
         const dec = new TextDecoder();
         let buf = "", toolIdx = -1;
+        const clearSpinner = () => {
+          if (toolIdx >= 0) { this.aiMessages.splice(toolIdx, 1); toolIdx = -1; }
+        };
         const handle = (frame) => {
           const line = frame.split("\n").find((l) => l.startsWith("data:"));
           if (!line) return;
@@ -1501,11 +1533,14 @@ const app = createApp({
             toolIdx = this.aiMessages.length - 1;
             this.scrollChat();
           } else if (evt.type === "tool_result") {
-            if (toolIdx >= 0) this.aiMessages.splice(toolIdx, 1);
-            toolIdx = -1;
-            this.addCard(evt.card);
-            this.aiMessages.push({ role: "tool", content: `✅ 已完成「${evt.card.title}」，结果卡已加入数据页`, card: true });
-            this.toast(`AI 已生成结果卡：${evt.card.title}`);
+            clearSpinner();
+            if (evt.card) {
+              this.addCard(evt.card);
+              this.aiMessages.push({ role: "tool", content: `✅ 已完成「${evt.card.title}」，结果卡已加入数据页`, card: true });
+              this.toast(`AI 已生成结果卡：${evt.card.title}`);
+            } else {  // 工具执行失败：后端回 card=null + error
+              this.aiMessages.push({ role: "tool", content: `⚠ ${evt.error || "执行失败"}（AI 会自行调整参数重试）` });
+            }
             this.scrollChat();
           } else if (evt.type === "note") {
             this.aiMessages.push({ role: "tool", content: `ℹ️ ${evt.text}` });

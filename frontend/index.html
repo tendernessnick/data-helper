@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>数据分析小助手</title>
-<link rel="stylesheet" href="/css/style.css?v=332">
+<link rel="stylesheet" href="/css/style.css?v=333">
 </head>
 <body>
 <div id="app" v-cloak>
@@ -265,7 +265,7 @@
               </div>
               <template v-if="card.deep === 'missing' && card.deepData">
                 <div class="ins-sec-title">🧭 缺失值矩阵（行分段 × 列）</div>
-                <div class="chart-box deep-chart" style="height:260px"></div>
+                <div class="chart-box deep-chart" style="height:260px" :ref="el => setCardDeepEl(card, el)"></div>
               </template>
               <template v-if="card.deep === 'dup' && card.deepData">
                 <div class="ins-sec-title">🔁 重复行明细</div>
@@ -1342,6 +1342,6 @@
 
 <script src="/vendor/echarts.min.js?v=331"></script>
 <script src="/vendor/vue.global.prod.js?v=331"></script>
-<script src="/js/app.js?v=332"></script>
+<script src="/js/app.js?v=333"></script>
 </body>
 </html>

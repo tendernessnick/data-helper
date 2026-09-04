@@ -2,7 +2,7 @@
 
 **本地运行的数据分析工作台**：导入 → 洞察 → 清洗 → SQL / 统计 / 时序 / 业务模板（RFM · 漏斗 · 留存 · 聚类 · A/B）→ AI Agent 辅助分析 → 可视化与报告。**数据全程不出本机**——AI 只看到列结构摘要，分析计算全部在你电脑上完成。
 
-![CI](https://github.com/tendernessnick/data-helper/actions/workflows/ci.yml/badge.svg) ![tests](https://img.shields.io/badge/tests-152%20passed-brightgreen) ![技术栈](https://img.shields.io/badge/Python-3.12%2B-blue) ![后端](https://img.shields.io/badge/FastAPI%20%2B%20DuckDB%20%2B%20SciPy-green) ![前端](https://img.shields.io/badge/Vue3%20%2B%20ECharts-无构建-orange) ![存储](https://img.shields.io/badge/存储-Parquet%20列存-blueviolet) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
+![CI](https://github.com/tendernessnick/data-helper/actions/workflows/ci.yml/badge.svg) ![tests](https://img.shields.io/badge/tests-169%20passed-brightgreen) ![技术栈](https://img.shields.io/badge/Python-3.12%2B-blue) ![后端](https://img.shields.io/badge/FastAPI%20%2B%20DuckDB%20%2B%20SciPy-green) ![前端](https://img.shields.io/badge/Vue3%20%2B%20ECharts-无构建-orange) ![存储](https://img.shields.io/badge/存储-Parquet%20列存-blueviolet) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
 
 ---
 
@@ -50,7 +50,7 @@
 python -m venv .venv
 .venv\Scripts\pip install -r requirements-dev.txt
 .venv\Scripts\python run_app.py            # 或 uvicorn backend.app.main:app --port 8765 --reload
-.venv\Scripts\python -m pytest tests/ -q   # 152 项测试
+.venv\Scripts\python -m pytest tests/ -q   # 169 项测试
 ```
 
 ## ✨ 功能一览
@@ -128,8 +128,9 @@ data_helper/
 │   ├── fetch_dataset.py          # 下载 UCI Online Retail II → CSV
 │   └── run_ecommerce_analysis.py # 端到端案例一键复跑
 ├── examples/ecommerce/   # 百万行电商分析叙事 + 全部结果 JSON
+├── docs/FEATURES.md      # 完整功能清单（模块化，含审计验收基准）
 ├── docs/screenshots/     # 真实界面截图
-├── tests/                # 152 项 pytest
+├── tests/                # 169 项 pytest
 └── .github/workflows/ci.yml  # ruff + pytest（Python 3.12/3.14）
 ```
 
@@ -143,7 +144,7 @@ data_helper/
 
 ## 🧪 测试与质量
 
-**152 项 pytest 全绿**：上传解析（含 GBK/JSON/XLSX/流式大文件/类型漂移回退）、Parquet 存储与 pickle 自动迁移、SQL（含建集不截断回归）、漏斗/留存/聚类业务模板、统计检验与 A/B 套件、AI Agent（mock LLM：工具循环/错误回填/降级回退/会话历史/SSE 协议）、金融、预测、报告导出等。`ruff` 零告警；CI 在 Python 3.12 / 3.14 双版本跑 lint + tests。
+**169 项 pytest 全绿**：上传解析（含 GBK/JSON/XLSX/流式大文件/类型漂移回退）、Parquet 存储与 pickle 自动迁移、SQL（含建集不截断回归）、漏斗/留存/聚类业务模板、统计检验与 A/B 套件、AI Agent（mock LLM：工具循环/错误回填/降级回退/会话历史/SSE 协议）、金融、预测、报告导出等。`ruff` 零告警；CI 在 Python 3.12 / 3.14 双版本跑 lint + tests。
 
 ## ⚠️ 说明与边界
 
