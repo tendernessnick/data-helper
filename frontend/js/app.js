@@ -3,9 +3,13 @@ const { createApp } = Vue;
 
 let CARD_SEQ = 1;
 
+// 外部主页回跳：从个人主页带 ?home=<url> 链接进入时生效（本地直开无参数则保持站内重置行为）
+const HOME_URL = (new URLSearchParams(location.search).get("home") || "").trim();
+
 const app = createApp({
   data() {
     return {
+      homeUrl: HOME_URL,          // 非空时品牌区点击/主页按钮跳转外部主页
       datasets: [],
       currentId: null,
       meta: {},
@@ -332,6 +336,7 @@ const app = createApp({
     },
 
     goHome() {
+      if (this.homeUrl) { location.href = this.homeUrl; return; }
       this.currentId = null;
       this.meta = {};
       this.cards = [];

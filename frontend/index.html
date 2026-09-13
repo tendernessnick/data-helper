@@ -11,8 +11,9 @@
 
   <!-- 顶部命令栏 -->
   <header class="topbar">
-    <div class="brand clickable" title="返回主页" @click="goHome"><span class="logo">📊</span> 数据分析小助手</div>
+    <div class="brand clickable" :title="homeUrl ? '返回个人主页' : '返回数据集选择'" @click="goHome"><span class="logo">📊</span> 数据分析小助手</div>
     <div class="top-actions">
+      <a v-if="homeUrl" class="btn ghost" :href="homeUrl" title="返回个人主页">🏠 主页</a>
       <button class="btn primary" @click="$refs.file.click()" :disabled="busy">📥 导入文件</button>
       <input type="file" ref="file" style="display:none" @change="uploadFile" accept=".csv,.xlsx,.json,.txt">
       <button class="btn" @click="openPaste" :disabled="busy">📋 粘贴数据</button>

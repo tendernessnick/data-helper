@@ -33,6 +33,8 @@
 
 **普通用户（exe）**：双击 `数据分析小助手.exe`（单文件免安装）→ 自动打开浏览器 → 点「生成示例数据」立即体验。数据保存在 exe 同目录 `data/`。完整使用说明见 **[docs/使用手册.md](docs/使用手册.md)**。
 
+**在线版（web）**：`webview` 分支提供 Dockerfile，可一键部署到腾讯云 CloudBase 云托管（容器型，支持从 GitHub 仓库自动构建），浏览器直接访问，无需安装。步骤与注意事项见 **[docs/DEPLOY_CLOUDBASE.md](docs/DEPLOY_CLOUDBASE.md)**。
+
 **开发者（源码）**：
 
 ```bash
@@ -113,6 +115,8 @@ data_helper/
 ├── examples/ecommerce/   # 百万行预处理叙事 + 全部结果 JSON
 ├── docs/FEATURES.md      # 完整功能清单（模块化，含审计验收基准）
 ├── docs/使用手册.md       # 面向普通用户的使用手册
+├── docs/DEPLOY_CLOUDBASE.md # CloudBase 云托管部署指南（webview 分支，Docker）
+├── Dockerfile            # 云托管容器镜像（监听平台注入的 PORT）
 ├── tests/                # 198 项 pytest
 └── .github/workflows/ci.yml  # ruff + pytest（Python 3.12/3.14）
 ```

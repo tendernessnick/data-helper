@@ -35,6 +35,12 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+
+@router.get("/health")
+def health():
+    """存活探针（容器平台健康检查用）：进程在且能响应即返回 ok，不触碰数据层。"""
+    return {"ok": True}
+
 # 上传大小上限（MB），可用环境变量覆盖；原始文件先落盘临时文件，大 CSV 分块流式读入
 MAX_UPLOAD_MB = int(os.environ.get("DATA_HELPER_MAX_UPLOAD_MB", "500"))
 

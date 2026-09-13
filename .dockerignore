@@ -1,0 +1,29 @@
+# 构建上下文瘦身：镜像只需要 backend/ + frontend/ + requirements.txt
+.git/
+.github/
+.venv*/
+.venv
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mimosa/
+.zcode/
+
+# 运行时产物与本地构建产物
+data/
+exports/
+dist/
+build/
+tests/_tmpdata*/
+
+# 非运行时必需
+tests/
+docs/
+examples/
+scripts/
+*.spec
+*.md
+LICENSE
+Dockerfile
+.dockerignore
