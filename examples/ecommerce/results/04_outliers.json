@@ -1,0 +1,44 @@
+{
+ "columns": [
+  {
+   "name": "列",
+   "numeric": false
+  },
+  {
+   "name": "下界",
+   "numeric": true
+  },
+  {
+   "name": "上界",
+   "numeric": true
+  },
+  {
+   "name": "离群数",
+   "numeric": true
+  },
+  {
+   "name": "离群占比%",
+   "numeric": true
+  },
+  {
+   "name": "最小值",
+   "numeric": true
+  },
+  {
+   "name": "最大值",
+   "numeric": true
+  }
+ ],
+ "rows": [
+  [
+   "Amount",
+   -16.875,
+   41.325,
+   66382,
+   8.24,
+   0.0,
+   168469.6
+  ]
+ ],
+ "note": "异常值检测（IQR 1.5倍四分位距）；可在清洗中用「剔除异常值」一键处理"
+}

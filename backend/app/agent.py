@@ -1,7 +1,6 @@
 """AI Agent：LLM 出意图、本地执行工具、数据不出本机。
 
-- 工具注册表：把汇总/分组/相关/趋势/RFM/漏斗/同期群留存/A-B/聚类/预测等分析能力
-  以 JSON Schema 声明为 function calling 工具
+- 工具注册表：把数据体检/汇总/分组/相关/趋势等能力以 JSON Schema 声明为 function calling 工具
 - 工具循环：LLM 多轮发起 tool_calls，后端在本地 DataFrame 上真实执行并回填结果，
   LLM 只看到列结构摘要与工具返回的统计结果，原始数据永不上传
 - SSE 流式：正文增量实时下发；工具调用下发进度事件，前端展示"正在执行 …"
@@ -14,8 +13,7 @@ import time
 
 import requests
 
-from . import analysis, biz, stats_tests
-from . import forecast as forecast_mod
+from . import analysis, insights
 from .ai import TIMEOUT_SECONDS, load_config
 
 logger = logging.getLogger(__name__)
@@ -42,13 +40,20 @@ def _t_describe(df, p):
     return analysis.describe(df, {})
 
 
-def _t_prop_z(df, p):
-    if "success_a" in p:
-        return stats_tests.prop_z_test(None, p)
-    return stats_tests.prop_z_test(df, p)
+def _t_health_check(df, p):
+    return insights.run_insights(df, {"name": ""})
 
 
 TOOLS = [
+    {
+        "name": "health_check",
+        "label": "数据体检",
+        "description": "对数据集做全面体检：质量评分（0-100）+ 结构化问题清单（缺失/重复/类型混乱/格式脏污/"
+                       "异常值/日期问题等，每条含严重级别与所在列）。用户问数据质量、有没有问题、怎么清洗时优先调用。",
+        "parameters": {"type": "object", "properties": {}, "required": []},
+        "runner": _t_health_check,
+        "card": {"type": "insight", "icon": "🩺", "title": "数据体检", "span2": True},
+    },
     {
         "name": "describe",
         "label": "汇总统计",
@@ -86,7 +91,7 @@ TOOLS = [
     {
         "name": "trend",
         "label": "时间趋势",
-        "description": "按日期列+数值列聚合出时间趋势（含同比/环比口径的时间序列）。",
+        "description": "按日期列+数值列聚合出时间趋势折线。",
         "parameters": {
             "type": "object",
             "properties": {
@@ -135,106 +140,6 @@ TOOLS = [
         "runner": analysis.value_counts,
         "card": {"type": "table", "icon": "🥧", "title": "频次统计", "span2": False},
     },
-    {
-        "name": "rfm",
-        "label": "RFM 客户分层",
-        "description": "RFM 客户分层：按客户列+日期列+金额列计算最近消费/频次/金额并分层。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "id_column": {"type": "string", "description": "客户ID列"},
-                "date_column": {"type": "string", "description": "订单日期列"},
-                "value_column": {"type": "string", "description": "金额列"},
-            },
-            "required": ["id_column", "date_column", "value_column"],
-        },
-        "runner": analysis.rfm,
-        "card": {"type": "rfm", "icon": "💎", "title": "RFM 客户分层", "span2": True},
-    },
-    {
-        "name": "funnel",
-        "label": "转化漏斗",
-        "description": "转化漏斗：用户列+事件列+有序步骤，输出各步到达人数与转化率。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "user_column": {"type": "string"},
-                "event_column": {"type": "string"},
-                "steps": {"type": "array", "items": {"type": "string"}, "description": "事件步骤值（按顺序，至少 2 个）"},
-            },
-            "required": ["user_column", "event_column", "steps"],
-        },
-        "runner": biz.funnel,
-        "card": {"type": "funnel", "icon": "🎯", "title": "转化漏斗", "span2": False},
-    },
-    {
-        "name": "cohort",
-        "label": "同期群留存",
-        "description": "同期群留存：按用户首次活跃月/周分群，计算第 N 期留存率矩阵。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "user_column": {"type": "string"},
-                "date_column": {"type": "string"},
-                "freq": {"type": "string", "enum": ["M", "W"]},
-                "periods": {"type": "integer", "description": "观察期数 2-12，默认 8"},
-            },
-            "required": ["user_column", "date_column"],
-        },
-        "runner": biz.cohort,
-        "card": {"type": "cohort", "icon": "🗓️", "title": "同期群留存", "span2": True},
-    },
-    {
-        "name": "cluster",
-        "label": "K-means 聚类",
-        "description": "K-means 聚类：选 2 个以上数值列，肘部法+轮廓系数自动推荐 k，输出各簇画像。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "columns": {"type": "array", "items": {"type": "string"}, "description": "参与聚类的数值列"},
-                "k": {"type": "integer", "description": "指定 k；缺省自动推荐"},
-            },
-            "required": ["columns"],
-        },
-        "runner": biz.cluster,
-        "card": {"type": "cluster", "icon": "🧩", "title": "K-means 聚类", "span2": True},
-    },
-    {
-        "name": "prop_z_test",
-        "label": "A/B 两比例检验",
-        "description": "A/B 实验两比例 z 检验：数据集模式给 group_column + success_column（+ success_value 转化取值）；"
-        "或直接给 success_a/n_a/success_b/n_b 计数。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "group_column": {"type": "string", "description": "实验分组列"},
-                "success_column": {"type": "string", "description": "转化事件列"},
-                "success_value": {"type": "string", "description": "代表转化的取值"},
-                "success_a": {"type": "number"}, "n_a": {"type": "number"},
-                "success_b": {"type": "number"}, "n_b": {"type": "number"},
-            },
-            "required": [],
-        },
-        "runner": _t_prop_z,
-        "card": {"type": "test", "icon": "🔬", "title": "A/B 两比例 z 检验", "span2": False},
-    },
-    {
-        "name": "forecast",
-        "label": "时间序列预测",
-        "description": "Holt 趋势/季节预测：日期列+数值列，按月/周粒度预测未来 N 期。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "date_column": {"type": "string"},
-                "value_column": {"type": "string"},
-                "freq": {"type": "string", "enum": ["D", "W", "M", "Q", "Y"]},
-                "horizon": {"type": "integer", "description": "预测期数 1-36，默认 6"},
-            },
-            "required": ["date_column", "value_column"],
-        },
-        "runner": forecast_mod.forecast,
-        "card": {"type": "table", "icon": "🔮", "title": "时间序列预测", "span2": True},
-    },
 ]
 
 TOOLS_BY_NAME = {t["name"]: t for t in TOOLS}
@@ -244,13 +149,15 @@ TOOLS_SCHEMA = [
 ]
 
 AGENT_SYSTEM_PROMPT = (
-    "你是「数据分析小助手」的 AI 分析员，帮助业务用户分析一个本地数据集。"
-    "你可以调用工具在用户本机真实执行分析（RFM/漏斗/留存/聚类/A-B 检验/预测等），"
-    "工具会返回统计结果，你据此给出业务解读。规则：\n"
-    "1. 需要计算结论时优先调用合适的工具，不要凭空编造数字；\n"
-    "2. 列名必须与数据集摘要完全一致，不确定先说明；\n"
-    "3. 工具执行成功后，用简洁中文解读结果并给出业务建议（结论→依据→建议行动）；\n"
-    "4. 一次需要多步分析时，可以连续多次调用工具。"
+    "你是「数据分析小助手」的 AI 助手，帮助用户检查和预处理一个本地数据集。"
+    "你可以调用工具在用户本机真实执行（数据体检/汇总/分组/趋势/相关性等），"
+    "工具会返回统计结果，你据此给出数据质量与清洗建议。规则：\n"
+    "1. 用户问数据质量、有没有问题、该怎么清洗时，优先调用 health_check 工具；\n"
+    "2. 需要计算结论时优先调用合适的工具，不要凭空编造数字；\n"
+    "3. 列名必须与数据集摘要完全一致，不确定先说明；\n"
+    "4. 工具执行成功后，用简洁中文解读结果并给出可操作的清洗建议（问题→依据→建议行动，"
+    "可引用清洗面板中的操作名，如「去重」「填充缺失值」「类型转换」）；\n"
+    "5. 一次需要多步检查时，可以连续多次调用工具。"
 )
 
 

@@ -1,4 +1,5 @@
 """分模块代码审计修复的回归测试（v2.0 第二轮：工程质量）。"""
+import shutil
 import threading
 import time
 
@@ -7,7 +8,7 @@ import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.app import exporter, report, serialize, storage, transform
+from backend.app import exporter, serialize, storage, transform
 from backend.app.main import app
 
 client = TestClient(app)
@@ -23,21 +24,27 @@ def upload_csv(content: str, name="t.csv") -> str:
 
 
 def test_undo_with_legacy_pkl_snapshot_does_not_corrupt():
-    """P1 回归：旧版 prev.pkl 快照撤销必须走 read_pickle→parquet 转换。
+    """P1 回归：旧版 pkl 数据集在新版本机制下不损坏。
 
-    修复前把 pickle 字节直接 copy 成 current.parquet 再删光 pkl → 数据集损坏。
+    旧版 prev.pkl 快照已不再被撤销消费；current.pkl 读取时照常迁移为 Parquet，
+    撤销报告"无可撤销"而不是把 pickle 字节当 parquet 用（修复前会损坏数据集）。
     """
     ds = upload_csv("a\n1\n2\n")
     d = storage.DATASETS_DIR / ds
     # 构造 legacy 状态：current.pkl + prev.pkl（旧版本生成的快照）
     (d / "current.parquet").unlink()
+    shutil.rmtree(d / "versions", ignore_errors=True)
     pd.DataFrame({"a": [9]}).to_pickle(d / "current.pkl")
     pd.DataFrame({"a": [1, 2]}).to_pickle(d / "prev.pkl")
-    meta = storage.undo_dataset(ds)
-    assert meta["rows"] == 2
-    df = storage.load_df(ds)  # 修复前此处必然抛 Corrupt / parquet 解析异常
-    assert df["a"].tolist() == [1, 2]
-    assert not (d / "prev.pkl").exists() and not (d / "current.pkl").exists()
+    try:
+        storage.undo_dataset(ds)
+        raised = False
+    except storage.DatasetNotFound:
+        raised = True
+    assert raised  # 新机制不再消费 pkl 快照：报告无可撤销
+    df = storage.load_df(ds)  # current.pkl 迁移路径照常工作
+    assert df["a"].tolist() == [9]
+    assert not (d / "current.pkl").exists()
     assert (d / "current.parquet").exists()
 
 
@@ -191,24 +198,4 @@ def test_export_table_columns_missing_name_key():
 # ---------- report：XSS 转义 ----------
 
 
-def test_report_escapes_insight_alerts():
-    """P1 回归：列名注入 <img onerror> 不能逃出 HTML（报告定位是直接分享）。"""
-    evil = '<img src=x onerror=alert(1)>'
-    df = pd.DataFrame({evil: [1, 2, 3], "b": [4, 5, 6]})
-    meta = {"name": "xss测试", "original_filename": "x.csv"}
-    html = report.build_report_html(meta, df, report.run_insights(df, meta))
-    assert "<img src=x" not in html
-    assert "&lt;img" in html  # 已被转义
 
-
-# ---------- datafeed：新浪代码映射 ----------
-
-
-def test_sina_symbol_prefix_mapping():
-    from backend.app import datafeed
-
-    assert datafeed._sina_symbol("600519") == "sh600519"
-    assert datafeed._sina_symbol("688981") == "sh688981"
-    assert datafeed._sina_symbol("000001") == "sz000001"
-    assert datafeed._sina_symbol("300750") == "sz300750"
-    assert datafeed._sina_symbol("832000") == "bj832000"  # 北交所

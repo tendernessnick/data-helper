@@ -71,18 +71,6 @@ def test_groupby_bad_agg():
     assert r.status_code == 400
 
 
-def test_pivot():
-    ds = setup_ds()
-    r = analyze(
-        ds,
-        "pivot",
-        {"index": "地区", "columns": "产品", "values": "销售额", "aggfunc": "sum"},
-    )
-    assert r.status_code == 200
-    body = r.json()
-    cols = [c["name"] for c in body["columns"]]
-    assert "地区" in cols and "键盘" in cols and "鼠标" in cols
-
 
 def test_corr():
     ds = setup_ds()

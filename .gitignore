@@ -11,7 +11,10 @@ data/
 exports/
 dist/
 build/
-tests/_tmpdata/
+tests/_tmpdata*/
 
 # AI 编码工具会话（不属于项目产物）
 .zcode/
+
+# AI 工具会话状态
+.mimosa/

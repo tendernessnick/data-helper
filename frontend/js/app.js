@@ -1,4 +1,4 @@
-/* 数据分析小助手 - 前端逻辑（Vue3 全局构建 · 工具坞 + 结果画布工作台） */
+/* 数据分析小助手 - 前端逻辑（Vue3 全局构建 · IDE 式工作台：数据表/结果主区 + 底部工具面板） */
 const { createApp } = Vue;
 
 let CARD_SEQ = 1;
@@ -13,23 +13,65 @@ const app = createApp({
       busyRows: false,
       toasts: [],
 
+      // 项目化管理
+      projects: [],               // [{id, name, created_at}]
+      activeProject: "",          // 新导入/粘贴/示例归入的项目（空 = 未分组）
+      collapsedProjects: {},      // {projectId: true}
+      creatingProject: false,
+      newProjectName: "",
+      dsSearch: "",
+
+      // 版本快照（历史回跳）
+      versionsInfo: { current: -1, snapshots: [] },
+      maxVersions: 20,
+
       // 预览
-      rowsData: { total: 0, columns: [], rows: [] },
+      rowsData: { total: 0, unfiltered_total: 0, columns: [], rows: [] },
       page: 1,
       pageSize: 50,
-      previewOpen: true,
+
+      // 主区 tab：table 数据表 / cards 结果
+      mainTab: "table",
+
+      // 表格视图状态：排序 + 列筛选（只影响查看，不改数据）
+      sortCol: "",
+      sortDir: "asc",
+      colFilters: {},
+      colFilterSel: [],
+
+      // 列头下拉面板
+      colMenu: { show: false, x: 0, y: 0, col: "", dtype: "", values: null, missingCount: 0, search: "", truncated: false },
+
+      // 底部工具面板（SQL / Python）
+      bottomTab: "sql",
+      bottomH: 300,
+      bottomCollapsed: false,
+      bottomTabs: [
+        { k: "sql", l: "🗄️ SQL 控制台" },
+        { k: "tf", l: "🐍 Python 变换" },
+      ],
+
+      // 右侧工具栏（清洗 / 统计 / 采样 / 历史）
+      rightTab: "clean",
+      rightCollapsed: false,
+      rightTabs: [
+        { k: "clean", l: "🧹 清洗", icon: "🧹" },
+        { k: "ana", l: "📈 统计", icon: "📈" },
+        { k: "cmp", l: "🎯 采样", icon: "🎯" },
+        { k: "hist", l: "🕘 历史", icon: "🕘" },
+      ],
 
       // 结果画布
       cards: [],
 
-      // 工具坞开合
-      openSec: { cl: false, ana: true, ts: false, biz: false, stat: false, sql: false, cmp: false, feed: false, fin: false, tf: false, hist: false },
-
       // 主题
       theme: "light",
 
-      // 列头快捷菜单
-      colMenu: { show: false, x: 0, y: 0, col: "" },
+      // 拖放导入
+      dragOver: false,
+
+      // MCP 弹窗
+      mcpOpen: false,
 
       // 图表推荐
       suggestions: [],
@@ -52,57 +94,29 @@ const app = createApp({
         binMethod: "equal_width", bins: 5, binLabels: "", maxCols: 30,
         stdMethod: "zscore", logBase: "ln", dateParts: ["year", "month"],
         pattern: "", newColumn: "",
+        // 文本与格式清洗
+        emptyToNa: false, percentScale: false, mapText: "",
+        splitSep: ",", splitInto: "", missThreshold: 0.5, missAxis: "column",
       },
       dateParts: { year: "年", month: "月", day: "日", quarter: "季度", weekday: "星期", hour: "小时" },
       renameMap: {},
 
-      // 统计分析
+      // 快速统计与图表
       aggs: ["count", "sum", "mean", "min", "max", "median", "std", "nunique"],
       anaKind: "groupby",
       ana: {
         by: [], metrics: [{ column: "", agg: "sum" }],
-        index: "", columns: "", values: "", aggfunc: "sum",
         corrCols: [], corrMethod: "pearson", histCol: "", bins: 20, boxCols: [],
-        vcCol: "", top: 20,
+        vcCol: "", top: 20, outMethod: "iqr",
+        dateCol: "", valCol: "", freq: "M", agg: "sum",
       },
-
-      // 时序分析
-      tsKind: "trend",
-      ts: { dateCol: "", valCol: "", freq: "M", agg: "sum", window: 3, horizon: 6 },
-
-      // 业务模板
-      bizKind: "rfm",
-      biz: { idCol: "", dateCol: "", valCol: "", catCol: "", topN: 30, outCols: [], outMethod: "iqr",
-             funnelUserCol: "", funnelEventCol: "", funnelSteps: "",
-             cohortUserCol: "", cohortDateCol: "", cohortFreq: "M", cohortPeriods: 8,
-             clusterCols: [], clusterK: 0 },
-
-      // 统计检验
-      statKind: "normality",
-      stat: { col: "", groupCol: "", valCol: "", colA: "", colB: "", colX: "", colY: "",
-              propGroupCol: "", propSuccessCol: "", propSuccessValue: "",
-              ssBaseline: 0.10, ssMde: 2, ssRelative: false, ssAlpha: 0.05, ssPower: 0.8 },
 
       // SQL 控制台
       sqlQuery: "",
       sqlTables: [],
 
-      // 对比与采样
-      cmpKind: "compare",
-
-      // 在线行情
-      feed: { source: "stock", symbol: "", start: "", end: "", period: "D", adjust: "qfq" },
-      feedIndexes: [],
-
-      // 金融分析
-      finKind: "metrics",
-      fin: { close: "", rf: 0.02, freq: "D" },
-      finDetected: {},
-      finTech: { indicator: "ma", n: 5 },
-      finBench: { otherId: "" },
-      finPortfolio: [{ id: "", w: null }, { id: "", w: null }],
-      finTest: { col: "", trend: false },
-      cmp: { otherId: "", key: "", sampleMethod: "random", n: 30, by: "", name: "" },
+      // 采样
+      cmp: { sampleMethod: "random", n: 30, by: "", name: "" },
 
       // Python 变换
       code: "# 示例：新增一列\n# df['客单价'] = df['销售额'] / df['数量']\n",
@@ -118,18 +132,6 @@ const app = createApp({
         { name: "查看统计信息", code: "print(df.describe())\nprint(df['地区'].value_counts())" },
       ],
 
-      // 主视图：data / ai
-      mainView: "data",
-      aiSettingsOpen: false,
-      dsSearch: "",
-      aiSettings: { api_key: "", base_url: "", model: "" },
-      aiConfigured: false,
-      aiMessages: [],
-      aiInput: "",
-      aiSessionId: "",
-      aiStreaming: false,
-      aiAbort: null,
-
       // 粘贴导入
       pasteOpen: false,
       pasteText: "",
@@ -138,12 +140,14 @@ const app = createApp({
   },
 
   watch: {
-    mainView(v) {
-      if (v === "data") {
-        // AI 对话页生成的结果卡在其创建时数据画布未挂载（v-else-if），
-        // 图表从未渲染；切回数据页必须补一次
+    mainTab(v) {
+      if (v === "cards") {
+        // 结果页此前处于隐藏状态时图表未定尺寸，切回必须补一次渲染
         this.$nextTick(() => {
-          (this.cards || []).forEach((c) => { if (c.chartDiv) this.renderCardChart(c); });
+          (this.cards || []).forEach((c) => {
+            if (c.chartDiv) this.renderCardChart(c);
+            if (c.type === "insight") this.renderInsightRadar(c);  // 六维雷达同需补渲
+          });
         });
       }
     },
@@ -154,11 +158,29 @@ const app = createApp({
       // MCP 与主应用同端口；Streamable HTTP 端点为 /mcp/mcp
       return `${location.origin}/mcp/mcp`;
     },
+    sseUrl() {
+      return `${location.origin}/sse/sse`;
+    },
 
     filteredDatasets() {
       const q = (this.dsSearch || "").trim().toLowerCase();
       if (!q) return this.datasets;
       return this.datasets.filter((d) => (d.name || "").toLowerCase().includes(q));
+    },
+    groupedDatasets() {
+      const q = (this.dsSearch || "").trim().toLowerCase();
+      const groups = this.projects.map((p) => ({
+        id: p.id, name: p.name, items: [],
+        collapsed: this.collapsedProjects[p.id] === true,
+      }));
+      const ungrouped = { id: "", name: "未分组", items: [], collapsed: this.collapsedProjects["__ungrouped__"] === true };
+      const byId = Object.fromEntries(groups.map((g) => [g.id, g]));
+      for (const d of this.filteredDatasets) {
+        (byId[d.project] || ungrouped).items.push(d);
+      }
+      const out = groups.filter((g) => g.items.length || !q);  // 搜索时收起空项目
+      if (ungrouped.items.length) out.push(ungrouped);
+      return out;
     },
     ringTrack() {
       return this.theme === "dark" ? "rgba(255,255,255,.08)" : "rgba(0,0,0,.06)";
@@ -175,29 +197,10 @@ const app = createApp({
     anaReady() {
       const a = this.ana, k = this.anaKind;
       if (k === "groupby") return a.by.length && a.metrics.every((m) => m.column);
-      if (k === "pivot") return a.index && a.values;
       if (k === "histogram") return a.histCol;
       if (k === "value_counts") return a.vcCol;
+      if (k === "trend") return a.dateCol && a.valCol;
       return true;
-    },
-    bizReady() {
-      const b = this.biz, k = this.bizKind;
-      if (k === "rfm") return b.idCol && b.dateCol && b.valCol;
-      if (k === "pareto") return b.catCol && b.valCol;
-      if (k === "funnel") return b.funnelUserCol && b.funnelEventCol && b.funnelSteps.trim();
-      if (k === "cohort") return b.cohortUserCol && b.cohortDateCol;
-      if (k === "cluster") return b.clusterCols.length >= 2;
-      return true;
-    },
-    statReady() {
-      const s = this.stat, k = this.statKind;
-      if (k === "normality") return !!s.col;
-      if (k === "compare_groups") return s.groupCol && s.valCol;
-      if (k === "chi2") return s.colA && s.colB;
-      if (k === "corr_test") return s.colX && s.colY;
-      if (k === "prop_z") return s.propGroupCol && s.propSuccessCol && String(s.propSuccessValue).trim() !== "";
-      if (k === "sample_size") return s.ssBaseline > 0 && s.ssMde !== 0;
-      return false;
     },
     statusMissing() {
       const p = this.profile;
@@ -205,20 +208,53 @@ const app = createApp({
       const cells = p.columns.reduce((acc, c) => acc + (c.missing || 0), 0);
       return ((cells / (p.rows * p.columns.length)) * 100).toFixed(2);
     },
+    hasViewFilters() {
+      return Object.keys(this.colFilters).length > 0;
+    },
+    shownColValues() {
+      const m = this.colMenu;
+      if (!m.values) return [];
+      const q = (m.search || "").trim().toLowerCase();
+      if (!q) return m.values;
+      return m.values.filter((v) => String(v.label).toLowerCase().includes(q));
+    },
   },
 
   async mounted() {
     this.theme = localStorage.getItem("dh-theme") || "light";
     document.documentElement.dataset.theme = this.theme;
-    await this.refreshDatasets();
-    this.loadAiSettings();
+    this.activeProject = localStorage.getItem("dh-active-project") || "";
+    try { this.collapsedProjects = JSON.parse(localStorage.getItem("dh-collapsed-projects") || "{}"); } catch (e) { this.collapsedProjects = {}; }
+    await Promise.all([this.refreshDatasets(), this.loadProjects()]);
+
     window.addEventListener("resize", () => {
       Object.values(this._charts || {}).forEach((c) => c && c.resize());
     });
+    // 列头下拉面板：点击面板外关闭
     window.addEventListener("click", (e) => {
-      if (this.colMenu.show && !e.target.closest(".col-menu") && !e.target.closest("th")) {
+      if (this.colMenu.show && !e.target.closest(".col-menu") && !e.target.closest(".th-menu-btn")) {
         this.colMenu.show = false;
       }
+    });
+    // 全窗口拖放导入：任何位置拖入文件即可建数据集
+    let dragDepth = 0;
+    window.addEventListener("dragenter", (e) => {
+      if (e.dataTransfer && [...e.dataTransfer.types].includes("Files")) {
+        dragDepth++;
+        this.dragOver = true;
+      }
+    });
+    window.addEventListener("dragleave", () => {
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (!dragDepth) this.dragOver = false;
+    });
+    window.addEventListener("dragover", (e) => e.preventDefault());
+    window.addEventListener("drop", (e) => {
+      e.preventDefault();
+      dragDepth = 0;
+      this.dragOver = false;
+      const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (f) this.uploadOne(f);
     });
   },
 
@@ -261,6 +297,24 @@ const app = createApp({
       return c && /^(int|uint|float|Int|Float)/.test(c.dtype);
     },
 
+    // 列头类型缩写：完整 dtype（如 datetime64[ns]）在窄列里会撑爆列宽
+    dtypeShort(d) {
+      const k = String(d || "");
+      const m = {
+        int64: "int", int32: "int", int16: "int", int8: "int",
+        uint64: "int", uint32: "int", uint16: "int", uint8: "int",
+        Int64: "int", Int32: "int", Int16: "int", Int8: "int",
+        float64: "float", float32: "float", Float64: "float", Float32: "float",
+        bool: "bool", boolean: "bool",
+        object: "text", str: "text", string: "text", category: "cat",
+        "datetime64[ns]": "datetime", datetime64: "datetime",
+      };
+      if (m[k] !== undefined) return m[k];
+      if (k.startsWith("datetime64")) return "datetime";
+      if (k.startsWith("string") || k.startsWith("large_string") || k.startsWith("str")) return "text";
+      return k;
+    },
+
     timeAgo(ts) {
       if (!ts) return "";
       const d = new Date(ts.replace(" ", "T"));
@@ -273,33 +327,19 @@ const app = createApp({
       return ts.slice(5, 10);
     },
 
-    autoGrow(e) {
-      const el = e.target;
-      el.style.height = "auto";
-      el.style.height = Math.min(el.scrollHeight, 140) + "px";  // 与 CSS max-height 对齐
-    },
-
-    resetInputHeight() {
-      // 程序化清空不触发 @input，发送后必须手动收回复单行高度
-      this.$nextTick(() => {
-        const el = document.querySelector(".ai-composer .chat-input textarea");
-        if (el) el.style.height = "";
-      });
-    },
-
     aggLabel(a) {
       return { count: "计数", sum: "求和", mean: "平均", min: "最小", max: "最大", median: "中位数", std: "标准差", nunique: "去重计数" }[a] || a;
     },
 
     goHome() {
-      this.mainView = "data";
       this.currentId = null;
       this.meta = {};
       this.cards = [];
       Object.values(this._charts || {}).forEach((c) => c && c.dispose());
       this._charts = {};
-      this.previewOpen = true;
+      this.mainTab = "table";
       this.page = 1;
+      this.resetTableView();
       window.scrollTo(0, 0);
     },
 
@@ -308,7 +348,7 @@ const app = createApp({
       document.documentElement.dataset.theme = this.theme;
       localStorage.setItem("dh-theme", this.theme);
       // 重新渲染所有图表以应用文字颜色
-      this.cards.forEach((c) => this.renderCardChart(c));
+      this.cards.forEach((c) => { this.renderCardChart(c); if (c.type === "insight") this.renderInsightRadar(c); });
     },
 
     chartTheme() {
@@ -329,7 +369,7 @@ const app = createApp({
 
     isGenericChart(card) {
       const R = card.payload;
-      return !(R.matrix || R.box_stats || R.pareto || R.points || R.forecast_meta || R.heatmap || R.row_labels);
+      return !(R.matrix || R.box_stats || R.points || R.heatmap || R.row_labels);
     },
 
     moveCard(idx, dir) {
@@ -340,28 +380,6 @@ const app = createApp({
       this.cards = [...arr];
     },
 
-    async askAiChart() {
-      const prompt = this.aiInput.trim();
-      if (!prompt) { this.toast("请先在输入框描述想要的图表，如：各月销售额趋势", "error"); return; }
-      this.aiInput = "";
-      this.aiMessages.push({ role: "user", content: "📊 出图指令：" + prompt });
-      this.busy = true;
-      this.scrollChat();
-      try {
-        const R = await this.api("POST", "/api/ai/chart", { dataset_id: this.currentId, prompt });
-        const spec = R.ai_spec || {};
-        delete R.ai_spec;
-        this.addCard({
-          type: "table",
-          icon: "🤖", title: spec.title || "AI 图表", payload: R, span2: !!R.forecast_meta,
-        });
-        this.aiMessages.push({ role: "assistant", content: `已生成图表「${spec.title || "AI 图表"}」，见画布卡片。` });
-      } catch (e) {
-        this.aiMessages.push({ role: "assistant", content: "⚠ " + e.message });
-        this.toast(e.message, "error");
-      } finally { this.busy = false; this.scrollChat(); }
-    },
-
     // ---------- 卡片系统 ----------
     addCard(card) {
       card.id = CARD_SEQ++;
@@ -370,16 +388,15 @@ const app = createApp({
       if (card.showDetail === undefined) card.showDetail = false;
       // 是否需要图表容器
       const R = card.payload;
-      card.chartDiv = !!(R.matrix || R.box_stats || R.pareto || R.points || R.forecast_meta || R.heatmap || R.row_labels
-        || R.curve || R.scatter || R.frontier || R.funnel || R.cohort || R.cluster_points || (R.kline_safe)
+      card.chartDiv = !!(R.matrix || R.box_stats || R.points || R.heatmap || R.row_labels
         || (R.rows && R.rows.length > 1 && R.columns && R.columns.some((c) => c.numeric)));
-      if (card.type === "test") card.chartDiv = false;
-      if (card.type === "kline") card.chartDiv = true;
-      if (R.chart && R.chart.type && !R.matrix && !R.box_stats && !R.pareto) card.chartType = R.chart.type;
+      if (card.type === "insight") card.chartDiv = false;
+      if (R.chart && R.chart.type && !R.matrix && !R.box_stats) card.chartType = R.chart.type;
       this.cards.push(card);
+      this.mainTab = "cards";  // 结果生成即切到结果页
       this.$nextTick(() => {
         this.renderCardChart(card);
-        const el = document.querySelector(`.cards-grid .card-item:last-child`);
+        const el = document.querySelector(".cards-grid .card-item:last-child");
         if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
       });
       if (this.cards.length > 12) this.removeCard(this.cards[0]);
@@ -388,7 +405,7 @@ const app = createApp({
 
     removeCard(card) {
       if (this._charts) {
-        for (const key of [card.id, card.id + ":deep"]) {  // :deep = 洞察卡下钻图
+        for (const key of [card.id, card.id + ":deep", card.id + ":radar"]) {  // :deep/:radar = 体检卡下钻图/雷达
           if (this._charts[key]) { this._charts[key].dispose(); delete this._charts[key]; }
         }
       }
@@ -402,9 +419,56 @@ const app = createApp({
     },
 
     setCardDeepEl(card, el) {
-      // 洞察卡的下钻图容器（缺失矩阵）：v-if 挂载后回填，卸载时 el 为 null
+      // 体检卡的下钻图容器（缺失矩阵）：v-if 挂载后回填，卸载时 el 为 null
       this._deepEls = this._deepEls || {};
       this._deepEls[card.id] = el;
+    },
+
+    setCardRadarEl(card, el) {
+      // 体检卡的六维雷达容器：数据随卡片即到，ref 回调触发即渲染
+      this._radarEls = this._radarEls || {};
+      if (!el) { delete this._radarEls[card.id]; return; }
+      this._radarEls[card.id] = el;
+      this.$nextTick(() => this.renderInsightRadar(card));
+    },
+
+    radarDims(card) {
+      const dims = card.payload && card.payload.quality_dims;
+      return (dims || []).filter((d) => d.score !== null && d.score !== undefined);
+    },
+
+    renderInsightRadar(card) {
+      const dims = this.radarDims(card);
+      if (dims.length < 3) return;
+      const key = card.id + ":radar";
+      const el = (this._radarEls || {})[card.id];
+      if (!el) return;
+      if (!this._charts) this._charts = {};
+      if (this._charts[key]) { this._charts[key].dispose(); delete this._charts[key]; }
+      const T = this.chartTheme();
+      const ch = echarts.init(el);
+      this._charts[key] = ch;
+      ch.setOption({
+        color: [T.blue],
+        radar: {
+          indicator: dims.map((d) => ({ name: d.name, max: 100 })),
+          radius: "62%", center: ["50%", "52%"],
+          axisName: { color: T.txt, fontSize: 11 },
+          splitLine: { lineStyle: { color: T.split } },
+          axisLine: { lineStyle: { color: T.split } },
+          splitArea: { show: false },
+        },
+        series: [{
+          type: "radar",
+          data: [{
+            value: dims.map((d) => d.score),
+            name: "质量维度",
+            areaStyle: { opacity: 0.25 },
+            lineStyle: { width: 2 },
+          }],
+        }],
+        tooltip: {},
+      });
     },
 
     renderCardChart(card) {
@@ -471,94 +535,6 @@ const app = createApp({
           return;
         }
 
-        // 帕累托：柱(值) + 线(累计占比%) 双轴
-        if (R.pareto) {
-          const labels = R.rows.map((r) => String(r[0]));
-          const values = R.rows.map((r) => r[1]);
-          const cums = R.rows.map((r) => r[3]);
-          chart.setOption({
-            tooltip: { trigger: "axis" },
-            legend: { bottom: 0, textStyle: { color: T.txt } },
-            grid: { left: 60, right: 55, top: 25, bottom: 70 },
-            toolbox: { feature: { saveAsImage: { title: "保存" } }, right: 15 },
-            xAxis: { type: "category", data: labels, axisLabel: { rotate: 35, fontSize: 11, color: T.txt } },
-            yAxis: [
-              { type: "value", scale: true, axisLabel: { color: T.txt }, splitLine: { lineStyle: { color: T.split } } },
-              { type: "value", max: 100, axisLabel: { formatter: "{value}%", color: T.txt }, splitLine: { show: false } },
-            ],
-            series: [
-              { name: R.columns[1] ? R.columns[1].name : "数值", type: "bar", data: values, itemStyle: { color: T.palette[0], borderRadius: [4, 4, 0, 0] } },
-              { name: "累计占比%", type: "line", yAxisIndex: 1, data: cums, smooth: true, itemStyle: { color: T.orange }, lineStyle: { color: T.orange }, markLine: { data: [{ yAxis: 80, name: "80%" }], lineStyle: { type: "dashed", color: T.palette[3] }, label: { formatter: "80%", color: T.txt } } },
-            ],
-          });
-          return;
-        }
-
-        // 漏斗图
-        if (R.funnel) {
-          const f = R.funnel;
-          chart.setOption({
-            tooltip: { trigger: "item", formatter: (p) => `${p.name}: ${p.value} 人` },
-            toolbox: { feature: { saveAsImage: { title: "保存" } }, right: 15 },
-            series: [{
-              type: "funnel", left: "8%", right: "8%", top: 15, bottom: 20,
-              minSize: "18%", sort: "descending", gap: 3,
-              label: { show: true, position: "inside", formatter: "{b}: {c}", fontSize: 12, color: "#fff" },
-              itemStyle: { borderWidth: 0 },
-              data: f.steps.map((s, i) => ({ name: s, value: f.values[i] })),
-              color: T.palette,
-            }],
-          });
-          return;
-        }
-
-        // 同期群留存热力图（%）
-        if (R.cohort) {
-          const c = R.cohort;
-          const data = [];
-          c.values.forEach((row, i) => row.forEach((v, j) => { if (v !== null && !isNaN(v)) data.push([j, i, v]); }));
-          chart.setOption({
-            tooltip: { position: "top",
-              formatter: (p) => `${c.row_labels[p.value[1]]} · ${c.col_labels[p.value[0]]}: ${p.value[2]}%` },
-            grid: { left: 80, bottom: 80, right: 20, top: 15 },
-            xAxis: { type: "category", data: c.col_labels, axisLabel: { fontSize: 10, color: T.txt } },
-            yAxis: { type: "category", data: c.row_labels, axisLabel: { fontSize: 10, color: T.txt } },
-            visualMap: { min: 0, max: 100, calculable: true, orient: "horizontal", left: "center", bottom: 0,
-              textStyle: { color: T.txt }, itemWidth: 12,
-              inRange: { color: ["#ffffff", "#93c5fd", "#2563eb"] } },
-            series: [{ type: "heatmap", data,
-              label: { show: true, fontSize: 10, color: T.txtEm, formatter: (p) => p.value[2] + "%" } }],
-          });
-          return;
-        }
-
-        // 聚类散点（按簇着色 + 中心标记）
-        if (R.cluster_points) {
-          const cp = R.cluster_points;
-          const nClusters = Math.max(...cp.labels) + 1;
-          const byCluster = {};
-          cp.x.forEach((x, i) => {
-            (byCluster[cp.labels[i]] = byCluster[cp.labels[i]] || []).push([x, cp.y[i]]);
-          });
-          chart.setOption({
-            tooltip: { formatter: (p) => `${cp.xlabel}: ${p.value[0]}<br>${cp.ylabel}: ${p.value[1]}` },
-            legend: { bottom: 0, textStyle: { color: T.txt, fontSize: 11 } },
-            grid: { left: 65, right: 20, top: 25, bottom: 45 },
-            toolbox: { feature: { saveAsImage: { title: "保存" } }, right: 15 },
-            xAxis: { type: "value", scale: true, name: cp.xlabel, nameTextStyle: { color: T.txt, fontSize: 10 }, axisLabel: { color: T.txt }, splitLine: { lineStyle: { color: T.split } } },
-            yAxis: { type: "value", scale: true, name: cp.ylabel, nameTextStyle: { color: T.txt, fontSize: 10 }, axisLabel: { color: T.txt }, splitLine: { lineStyle: { color: T.split } } },
-            series: [
-              ...Array.from({ length: nClusters }, (_, ci) => ({
-                name: `簇${ci + 1}`, type: "scatter", data: byCluster[ci] || [],
-                symbolSize: 6, itemStyle: { color: T.palette[ci % T.palette.length], opacity: 0.65 },
-              })),
-              { name: "中心", type: "scatter", data: cp.centers, symbolSize: 14, symbol: "diamond",
-                itemStyle: { color: T.orange }, label: { show: true, formatter: "中心", position: "top", fontSize: 9, color: T.txt } },
-            ],
-          });
-          return;
-        }
-
         // 散点（交互分析）
         if (R.points) {
           chart.setOption({
@@ -567,130 +543,6 @@ const app = createApp({
             xAxis: { type: "value", scale: true, name: R.x, nameTextStyle: { color: T.txt }, axisLabel: { color: T.txt }, splitLine: { lineStyle: { color: T.split } } },
             yAxis: { type: "value", scale: true, name: R.y, nameTextStyle: { color: T.txt }, axisLabel: { color: T.txt }, splitLine: { lineStyle: { color: T.split } } },
             series: [{ type: "scatter", data: R.points, symbolSize: 7, itemStyle: { color: T.palette[0], opacity: .6 } }],
-          });
-          return;
-        }
-
-        // 预测卡：历史线 + 预测线 + 置信带
-        if (R.forecast_meta) {
-          const fm = R.forecast_meta;
-          const allLabels = [...fm.history_labels, ...fm.labels];
-          const nHist = fm.history_labels.length;
-          const histData = fm.history_values.map((v, i) => [i, v]);
-          // 预测线从最后一个历史点衔接
-          const fcData = [[nHist - 1, fm.history_values[nHist - 1]], ...fm.values.map((v, i) => [nHist + i, v])];
-          const lowerData = Array(nHist - 1).fill(null)
-            .concat([[nHist - 1, fm.history_values[nHist - 1]]])
-            .concat(fm.lower.map((v, i) => [nHist + i, v]));
-          const bandData = Array(nHist - 1).fill(null)
-            .concat([[nHist - 1, 0]])
-            .concat(fm.values.map((v, i) => [nHist + i, Math.max(fm.upper[i] - fm.lower[i], 0)]));
-          chart.setOption({
-            tooltip: { trigger: "axis" },
-            legend: { bottom: 0, textStyle: { color: T.txt } },
-            grid: { left: 65, right: 20, top: 25, bottom: 65 },
-            xAxis: { type: "category", data: allLabels, axisLabel: { rotate: 35, fontSize: 10, color: T.txt } },
-            yAxis: { type: "value", scale: true, axisLabel: { color: T.txt }, splitLine: { lineStyle: { color: T.split } } },
-            series: [
-              { name: "实际值", type: "line", data: histData, smooth: true, symbolSize: 3, itemStyle: { color: T.palette[0] }, lineStyle: { color: T.palette[0], width: 2.5 } },
-              { name: `预测值（${R.best}）`, type: "line", data: fcData, smooth: true, lineStyle: { type: "dashed", color: T.orange, width: 2.5 }, itemStyle: { color: T.orange } },
-              { name: "band-base", type: "line", data: lowerData, stack: "band", symbol: "none", lineStyle: { opacity: 0 }, tooltip: { show: false }, silent: true },
-              { name: "95%区间", type: "line", data: bandData, stack: "band", symbol: "none", lineStyle: { opacity: 0 }, areaStyle: { color: T.orange + "26" }, tooltip: { show: false }, silent: true },
-            ],
-          });
-          return;
-        }
-
-        // K线图（candlestick + MA + 成交量）
-        if (card.type === "kline" && R.dates) {
-          const up = "#34c759", down = "#ff3b30";
-          const mas = Object.entries(R.ma || {}).map(([name, data]) => ({
-            name, type: "line", data, showSymbol: false, smooth: false, lineStyle: { width: 1.2 },
-          }));
-          const volColors = R.kdata.map((k) => (k[1] >= k[0] ? up : down));
-          const option = {
-            animation: false,
-            tooltip: { trigger: "axis", axisPointer: { type: "cross" } },
-            legend: { bottom: 18, textStyle: { color: T.txt, fontSize: 11 } },
-            grid: [
-              { left: 60, right: 20, top: 20, height: "55%" },
-              { left: 60, right: 20, top: "76%", height: "14%" },
-            ],
-            xAxis: [
-              { type: "category", data: R.dates, gridIndex: 0, boundaryGap: true, axisLine: { lineStyle: { color: T.split } }, axisLabel: { color: T.txt, fontSize: 10 } },
-              { type: "category", data: R.dates, gridIndex: 1, boundaryGap: true, axisLabel: { show: false }, axisLine: { lineStyle: { color: T.split } } },
-            ],
-            yAxis: [
-              { scale: true, gridIndex: 0, axisLabel: { color: T.txt, fontSize: 10 }, splitLine: { lineStyle: { color: T.split } } },
-              { scale: true, gridIndex: 1, axisLabel: { show: false }, splitLine: { show: false } },
-            ],
-            dataZoom: [
-              { type: "inside", xAxisIndex: [0, 1], start: 40, end: 100 },
-              { type: "slider", xAxisIndex: [0, 1], bottom: 0, height: 14, start: 40, end: 100, textStyle: { color: T.txt, fontSize: 9 } },
-            ],
-            series: [
-              { name: "K线", type: "candlestick", data: R.kdata, xAxisIndex: 0, yAxisIndex: 0,
-                itemStyle: { color: up, color0: down, borderColor: up, borderColor0: down } },
-              ...mas.map((m, i) => ({ ...m, xAxisIndex: 0, yAxisIndex: 0, color: T.palette[(i + 1) % T.palette.length] })),
-              ...(R.volumes ? [{ name: "成交量", type: "bar", data: R.volumes, xAxisIndex: 1, yAxisIndex: 1,
-                  itemStyle: { color: (p2) => (p2.dataIndex >= 0 && volColors[p2.dataIndex] ? volColors[p2.dataIndex] : T.palette[0]) } }] : []),
-            ],
-          };
-          chart.setOption(option);
-          return;
-        }
-
-        // 金融指标卡的累计收益曲线
-        if (R.curve && R.groups) {
-          chart.setOption({
-            tooltip: { trigger: "axis", valueFormatter: (v) => v + "%" },
-            grid: { left: 60, right: 20, top: 20, bottom: 30 },
-            xAxis: { type: "category", data: R.curve.labels, axisLabel: { color: T.txt, fontSize: 10 } },
-            yAxis: { type: "value", axisLabel: { formatter: "{value}%", color: T.txt }, splitLine: { lineStyle: { color: T.split } } },
-            series: [{ name: "累计收益", type: "line", data: R.curve.values, smooth: true, showSymbol: false,
-                       color: T.palette[0], areaStyle: { opacity: 0.12 } }],
-          });
-          return;
-        }
-
-        // CAPM 散点 + 回归线
-        if (R.scatter && R.scatter.reg_y) {
-          const sc = R.scatter;
-          chart.setOption({
-            tooltip: { formatter: (p) => `${sc.xlabel}: ${p.value[0]}<br>${sc.ylabel}: ${p.value[1]}` },
-            grid: { left: 65, right: 20, top: 25, bottom: 45 },
-            xAxis: { type: "value", scale: true, name: sc.xlabel, nameTextStyle: { color: T.txt, fontSize: 10 }, axisLabel: { color: T.txt, fontSize: 10, formatter: (v) => (v * 100).toFixed(0) + "%" }, splitLine: { lineStyle: { color: T.split } } },
-            yAxis: { type: "value", scale: true, name: sc.ylabel, nameTextStyle: { color: T.txt, fontSize: 10 }, axisLabel: { color: T.txt, fontSize: 10, formatter: (v) => (v * 100).toFixed(0) + "%" }, splitLine: { lineStyle: { color: T.split } } },
-            series: [
-              { type: "scatter", data: sc.x.map((x, i) => [x, sc.y[i]]), symbolSize: 5,
-                itemStyle: { color: T.palette[0], opacity: 0.5 } },
-              { type: "line", data: sc.reg_x.map((x, i) => [x, sc.reg_y[i]]), symbol: "none",
-                lineStyle: { color: T.palette[3], width: 2, type: "dashed" }, tooltip: { show: false } },
-            ],
-          });
-          return;
-        }
-
-        // 组合有效前沿
-        if (R.frontier) {
-          const f = R.frontier;
-          chart.setOption({
-            tooltip: { trigger: "item", formatter: (p) => `波动 ${(p.value[0] * 100).toFixed(1)}%<br>收益 ${(p.value[1] * 100).toFixed(1)}%` },
-            grid: { left: 65, right: 20, top: 25, bottom: 45 },
-            xAxis: { type: "value", scale: true, name: "年化波动", nameTextStyle: { color: T.txt, fontSize: 10 },
-                     axisLabel: { color: T.txt, fontSize: 10, formatter: (v) => (v * 100).toFixed(0) + "%" }, splitLine: { lineStyle: { color: T.split } } },
-            yAxis: { type: "value", scale: true, name: "年化收益", nameTextStyle: { color: T.txt, fontSize: 10 },
-                     axisLabel: { color: T.txt, fontSize: 10, formatter: (v) => (v * 100).toFixed(0) + "%" }, splitLine: { lineStyle: { color: T.split } } },
-            series: [
-              { type: "scatter", data: f.vols.map((v, i) => [v, f.rets[i]]), symbolSize: 3,
-                itemStyle: { color: T.palette[0], opacity: 0.35 } },
-              { type: "scatter", data: [f.min_var], symbolSize: 12, name: "最小方差",
-                itemStyle: { color: T.palette[2] }, label: { show: true, formatter: "最小方差", position: "top", color: T.txt, fontSize: 10 } },
-              { type: "scatter", data: [f.max_sharpe], symbolSize: 12, name: "最大Sharpe",
-                itemStyle: { color: T.palette[3] }, label: { show: true, formatter: "最大Sharpe", position: "top", color: T.txt, fontSize: 10 } },
-              { type: "scatter", data: [f.current], symbolSize: 12, name: "当前组合",
-                itemStyle: { color: T.palette[4] }, label: { show: true, formatter: "当前组合", position: "bottom", color: T.txt, fontSize: 10 } },
-            ],
           });
           return;
         }
@@ -774,8 +626,90 @@ const app = createApp({
       this.datasets = await this.api("GET", "/api/datasets");
     },
 
+    // ---------- 项目（数据集分组） ----------
+    async loadProjects() {
+      try { this.projects = await this.api("GET", "/api/projects"); }
+      catch (e) { this.projects = []; }
+    },
+    parentName(parentId) {
+      const p = this.datasets.find((d) => d.id === parentId);
+      return p ? p.name : "";
+    },
+    startNewProject() {
+      this.creatingProject = true;
+      this.newProjectName = "";
+      this.$nextTick(() => this.$refs.newPrjInput && this.$refs.newPrjInput.focus());
+    },
+    async confirmNewProject() {
+      const name = (this.newProjectName || "").trim();
+      if (!name) { this.creatingProject = false; return; }
+      try {
+        const prj = await this.api("POST", "/api/projects", { name });
+        this.creatingProject = false;
+        this.projects.push(prj);
+        this.setActiveProject(prj.id);
+        this.toast(`项目「${prj.name}」已创建，之后导入的表会归入其中`);
+      } catch (e) { this.toast(e.message, "error"); }
+    },
+    async renameProject(g) {
+      const name = prompt("新的项目名称：", g.name);
+      if (!name || !name.trim() || name.trim() === g.name) return;
+      try {
+        const prj = await this.api("PATCH", `/api/projects/${g.id}`, { name: name.trim() });
+        const p = this.projects.find((x) => x.id === g.id);
+        if (p) p.name = prj.name;
+      } catch (e) { this.toast(e.message, "error"); }
+    },
+    async deleteProject(g) {
+      const n = g.items.length;
+      const ok = confirm(`删除项目「${g.name}」？${n ? `其中 ${n} 个数据集将移回「未分组」（数据本身不受影响）。` : ""}`);
+      if (!ok) return;
+      try {
+        await this.api("DELETE", `/api/projects/${g.id}`);
+        if (this.activeProject === g.id) this.setActiveProject("");
+        await Promise.all([this.loadProjects(), this.refreshDatasets()]);
+        this.toast(`项目「${g.name}」已删除`);
+      } catch (e) { this.toast(e.message, "error"); }
+    },
+    setActiveProject(id) {
+      this.activeProject = id || "";
+      localStorage.setItem("dh-active-project", this.activeProject);
+    },
+    toggleProject(id) {
+      const key = id || "__ungrouped__";
+      this.collapsedProjects = { ...this.collapsedProjects, [key]: !this.collapsedProjects[key] };
+      localStorage.setItem("dh-collapsed-projects", JSON.stringify(this.collapsedProjects));
+    },
+    async moveDs(projectId) {
+      try {
+        const m = await this.api("POST", `/api/datasets/${this.currentId}/move`, { project: projectId || "" });
+        this.meta = m;
+        await this.refreshDatasets();
+        const pname = projectId ? (this.projects.find((p) => p.id === projectId) || {}).name : "未分组";
+        this.toast(`已移动到「${pname}」`);
+      } catch (e) { this.toast(e.message, "error"); }
+    },
+
+    // ---------- 版本快照（多步回溯） ----------
+    async loadVersions() {
+      if (!this.currentId) return;
+      try { this.versionsInfo = await this.api("GET", `/api/datasets/${this.currentId}/versions`); }
+      catch (e) { this.versionsInfo = { current: -1, snapshots: [] }; }
+    },
+    canJump(v) {
+      return v === this.versionsInfo.current || this.versionsInfo.snapshots.includes(v);
+    },
+    async restoreTo(v) {
+      this.busy = true;
+      try {
+        const m = await this.api("POST", `/api/datasets/${this.currentId}/restore`, { version: v });
+        this.toast(`已回到 v${v}（${m.rows} 行 × ${m.cols} 列）`);
+        await this.afterDataChange(m);
+      } catch (e) { this.toast(e.message, "error"); }
+      finally { this.busy = false; }
+    },
+
     async selectDataset(id) {
-      this.mainView = "data";
       if (this.currentId === id) return;
       this.currentId = id;
       const seq = (this._dsSeq = (this._dsSeq || 0) + 1);  // 连点竞态：只认最后一次选择
@@ -787,7 +721,11 @@ const app = createApp({
       this.cleanSel.columns = [];
       this.cleanSel.dropCols = [];
       this.cleanSel.outlierCols = [];
-      await Promise.all([this.loadRows(), this.loadProfile(), this.loadSqlTables(), this.detectFinance(), this.loadFeedIndexes()]);
+      this.mainTab = "table";
+      this.sortCol = "";
+      this.colFilters = {};
+      this.suggestions = [];
+      await Promise.all([this.loadRows(), this.loadProfile(), this.loadSqlTables(), this.loadVersions()]);
       if (seq !== this._dsSeq) return;  // 期间又切了别的数据集：本批结果作废
       this.initDefaults();  // 必须在 loadProfile 之后：否则默认列取到上一个数据集的列
       const m = await this.api("GET", `/api/datasets/${id}`);
@@ -798,7 +736,10 @@ const app = createApp({
       if (!this.currentId) return;
       this.busyRows = true;
       try {
-        this.rowsData = await this.api("GET", `/api/datasets/${this.currentId}/rows?page=${this.page}&page_size=${this.pageSize}`);
+        const p = new URLSearchParams({ page: this.page, page_size: this.pageSize });
+        if (this.sortCol) { p.set("sort", this.sortCol); p.set("order", this.sortDir); }
+        if (this.hasViewFilters) p.set("filters", JSON.stringify(this.colFilters));
+        this.rowsData = await this.api("GET", `/api/datasets/${this.currentId}/rows?${p}`);
       } catch (e) { this.toast(e.message, "error"); }
       finally { this.busyRows = false; }
     },
@@ -811,16 +752,115 @@ const app = createApp({
 
     async afterDataChange(respMeta) {
       if (respMeta) this.meta = respMeta;
-      await Promise.all([this.loadRows(), this.loadProfile(), this.refreshDatasets()]);
+      // 数据变了：排序/筛选仍有效，但回到数据表并刷新
+      this.mainTab = "table";
+      await Promise.all([this.loadRows(), this.loadProfile(), this.refreshDatasets(), this.loadVersions()]);
     },
 
-    async uploadFile(ev) {
+    // ---------- 表格交互：排序 / 列筛选 ----------
+    toggleSort(name) {
+      if (this.sortCol !== name) { this.sortCol = name; this.sortDir = "asc"; }
+      else if (this.sortDir === "asc") { this.sortDir = "desc"; }
+      else { this.sortCol = ""; this.sortDir = "asc"; }
+      this.page = 1;
+      this.loadRows();
+    },
+
+    colSort(dir) {
+      this.sortCol = this.colMenu.col;
+      this.sortDir = dir;
+      this.page = 1;
+      this.colMenu.show = false;
+      this.loadRows();
+    },
+
+    colMissingPct(name) {
+      const c = (this.profile.columns || []).find((x) => x.name === name);
+      return c && c.missing_pct > 0 ? c.missing_pct : (c ? null : null);
+    },
+
+    async openColMenu(ev, c) {
+      const isDate = /datetime/i.test(c.dtype);
+      this.colMenu = {
+        show: true, col: c.name, dtype: c.dtype,
+        values: isDate ? [] : null,  // 日期列值筛选不便按原值勾选，直接置空并提示
+        missingCount: 0, search: "", truncated: false,
+        x: Math.min(ev.clientX, window.innerWidth - 290),
+        y: Math.min(ev.clientY + 12, window.innerHeight - 430),
+      };
+      const prof = (this.profile.columns || []).find((p) => p.name === c.name);
+      if (prof) this.colMenu.missingCount = prof.missing || 0;
+      if (isDate) return;
+      try {
+        const R = await this.api("POST", `/api/datasets/${this.currentId}/analyze`,
+          { kind: "value_counts", params: { column: c.name, top: 100 } });
+        if (!this.colMenu.show || this.colMenu.col !== c.name) return;  // 菜单已关/已换列
+        const isNum = /^(int|uint|float|Int|Float)/.test(c.dtype);
+        this.colMenu.values = R.rows.filter((r) => r[0] !== "None")
+          .map((r) => ({ v: isNum ? Number(r[0]) : r[0], label: r[0], count: r[1] }));
+        this.colMenu.truncated = R.rows.length >= 100;
+        // 预选：该列已有筛选用已选值；否则默认全选（全选应用 = 无变化）
+        const existing = this.colFilters[c.name];
+        if (existing) this.colFilterSel = [...existing];
+        else {
+          this.colFilterSel = this.colMenu.values.map((v) => v.v);
+          if (this.colMenu.missingCount > 0) this.colFilterSel.push("__NULL__");
+        }
+      } catch (e) {
+        if (this.colMenu.show && this.colMenu.col === c.name) this.colMenu.values = [];
+      }
+    },
+
+    applyColFilter() {
+      const col = this.colMenu.col;
+      const total = (this.colMenu.values || []).length + (this.colMenu.missingCount > 0 ? 1 : 0);
+      if (!this.colFilterSel.length) {
+        this.toast("至少勾选一个要保留的值（全部不选等于删光）", "error");
+        return;
+      }
+      const next = { ...this.colFilters };
+      if (this.colFilterSel.length >= total) delete next[col];  // 全选 = 无筛选
+      else next[col] = [...this.colFilterSel];
+      this.colFilters = next;
+      this.colMenu.show = false;
+      this.page = 1;
+      this.loadRows();
+    },
+
+    clearColFilter(col) {
+      const next = { ...this.colFilters };
+      delete next[col];
+      this.colFilters = next;
+      this.page = 1;
+      this.loadRows();
+    },
+
+    clearAllFilters() {
+      this.colFilters = {};
+      this.page = 1;
+      this.loadRows();
+    },
+
+    resetTableView() {
+      this.sortCol = "";
+      this.sortDir = "asc";
+      this.colFilters = {};
+      this.page = 1;
+      if (this.currentId) this.loadRows();
+    },
+
+    // ---------- 上传 / 导入 ----------
+    uploadFile(ev) {
       const file = ev.target.files[0];
       ev.target.value = "";
-      if (!file) return;
+      if (file) this.uploadOne(file);
+    },
+
+    async uploadOne(file) {
       const fd = new FormData();
       fd.append("file", file);
       fd.append("name", "");
+      fd.append("project", this.activeProject || "");
       this.busy = true;
       try {
         const r = await fetch("/api/upload", { method: "POST", body: fd });
@@ -842,7 +882,7 @@ const app = createApp({
     async submitPaste() {
       this.busy = true;
       try {
-        const j = await this.api("POST", "/api/upload-paste", { text: this.pasteText, name: this.pasteName });
+        const j = await this.api("POST", "/api/upload-paste", { text: this.pasteText, name: this.pasteName, project: this.activeProject || "" });
         this.pasteOpen = false;
         this.toast(`已导入「${j.meta.name}」：${j.meta.rows} 行 × ${j.meta.cols} 列`);
         await this.refreshDatasets();
@@ -865,8 +905,8 @@ const app = createApp({
     async createSample() {
       this.busy = true;
       try {
-        const j = await this.api("POST", "/api/sample");
-        this.toast(`已生成示例数据：${j.meta.rows} 行（含缺失/重复，可体验清洗）`);
+        const j = await this.api("POST", `/api/sample?project=${encodeURIComponent(this.activeProject || "")}`);
+        this.toast(`已生成示例数据：${j.meta.rows} 行（含缺失/重复，可体验体检与清洗）`);
         await this.refreshDatasets();
         await this.selectDataset(j.id);
       } catch (e) { this.toast(e.message, "error"); }
@@ -888,8 +928,8 @@ const app = createApp({
         Object.values(this._charts || {}).forEach((c) => c && c.dispose());  // 此前漏 dispose：实例随画布重建泄漏
         this._charts = {};
         this.suggestions = [];
-        this.aiSessionId = "";  // 旧会话的列结构上下文已过期
         this.page = 1;
+        this.resetTableView();
         await this.refreshDatasets();
         this.toast("已删除");
       } catch (e) { this.toast(e.message, "error"); }
@@ -919,6 +959,47 @@ const app = createApp({
     exportDs(fmt) {
       const name = encodeURIComponent(this.meta.name || "数据集");
       window.location.href = `/api/datasets/${this.currentId}/export?format=${fmt}&filename=${name}`;
+    },
+
+    // ---------- 底部（SQL/Python）与右侧（清洗/统计/采样/历史）工具面板 ----------
+    switchBottomTab(k) {
+      this.bottomTab = k;
+      this.bottomCollapsed = false;
+    },
+
+    switchRightTab(k) {
+      this.rightTab = k;
+      this.rightCollapsed = false;
+    },
+
+    openBottom(k) {
+      // 统一入口：sql/tf 进底部面板，其余进右侧工具栏
+      if (k === "sql" || k === "tf") {
+        this.bottomTab = k;
+        this.bottomCollapsed = false;
+      } else {
+        this.rightTab = k;
+        this.rightCollapsed = false;
+      }
+    },
+
+    startResize(e) {
+      e.preventDefault();
+      const startY = e.clientY;
+      const startH = this.bottomH;
+      const onMove = (ev) => {
+        this.bottomH = Math.max(160, Math.min(Math.round(window.innerHeight * 0.7), startH + (startY - ev.clientY)));
+      };
+      const onUp = () => {
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+      };
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+    },
+
+    resetBottomH() {
+      this.bottomH = 300;
     },
 
     // ---------- 清洗 ----------
@@ -1000,6 +1081,52 @@ const app = createApp({
           if (s.newColumn.trim()) p.new_column = s.newColumn.trim();
           return p;
         }
+        case "trim_whitespace": {
+          if (!s.columns.length) throw new Error("请选择要去空格的列");
+          return { columns: s.columns };
+        }
+        case "normalize_text": {
+          if (!s.columns.length) throw new Error("请选择要规范化的列");
+          return { columns: s.columns, empty_to_na: !!s.emptyToNa };
+        }
+        case "parse_number": {
+          if (!s.column) throw new Error("请选择列");
+          const p = { column: s.column, percent_scale: !!s.percentScale };
+          if (s.newColumn.trim()) p.new_column = s.newColumn.trim();
+          return p;
+        }
+        case "map_values": {
+          if (!s.column) throw new Error("请选择列");
+          const mapping = {};
+          for (const line of s.mapText.split("\n")) {
+            const t = line.trim();
+            if (!t) continue;
+            const eq = t.indexOf("=");
+            if (eq <= 0) throw new Error(`映射格式应为「原值=新值」：${t}`);
+            mapping[t.slice(0, eq).trim()] = t.slice(eq + 1).trim();
+          }
+          if (!Object.keys(mapping).length) throw new Error("请至少填写一条映射（原值=新值）");
+          return { column: s.column, mapping, keep_original: true };
+        }
+        case "split_column": {
+          if (!s.column || !s.splitSep.trim()) throw new Error("请选择列并填写分隔符");
+          const p = { column: s.column, sep: s.splitSep };
+          const into = s.splitInto.split(/[,，]/).map((x) => x.trim()).filter(Boolean);
+          if (into.length) p.into = into;
+          return p;
+        }
+        case "cap_outliers": {
+          if (!s.outlierCols.length) throw new Error("请选择要盖帽的数值列");
+          return { columns: s.outlierCols, method: s.outlierMethod };
+        }
+        case "drop_high_missing": {
+          if (!(s.missThreshold > 0 && s.missThreshold <= 1)) throw new Error("阈值需在 (0, 1] 之间");
+          return { threshold: s.missThreshold, axis: s.missAxis };
+        }
+        case "unify_boolean_text": {
+          if (!s.column) throw new Error("请选择列");
+          return { column: s.column };
+        }
       }
       return {};
     },
@@ -1022,87 +1149,25 @@ const app = createApp({
       const nums = this.numCols, cats = this.catCols;
       const a = this.ana;
       a.metrics = [{ column: nums[0] ? nums[0].name : "", agg: "sum" }];
-      a.values = nums[0] ? nums[0].name : "";
       a.histCol = nums[0] ? nums[0].name : "";
       a.vcCol = cats[0] ? cats[0].name : "";
-      a.index = cats[0] ? cats[0].name : "";
+      a.valCol = nums[0] ? nums[0].name : "";
       const dt = (this.profile.columns || []).find((c) => c.kind === "datetime");
-      const dateLike = dt ? dt.name : (cats || []).find((c) => /日期|时间|date/i.test(c.name))?.name || cats[0]?.name || "";
-      this.ts.dateCol = dateLike;
-      this.ts.valCol = nums[0] ? nums[0].name : "";
-      const b = this.biz;
-      b.valCol = nums[0] ? nums[0].name : "";
-      b.dateCol = dateLike;
-      b.idCol = cats.find((c) => /客户|用户|会员|id/i.test(c.name))?.name || (cats[0] ? cats[0].name : "");
-      b.catCol = cats.find((c) => /产品|类别|地区|渠道|品类/i.test(c.name))?.name || (cats[0] ? cats[0].name : "");
-      // 统计检验默认值
-      this.stat.col = nums[0] ? nums[0].name : "";
-      this.stat.groupCol = b.idCol;
-      this.stat.valCol = nums[0] ? nums[0].name : "";
-      this.stat.colA = cats[0] ? cats[0].name : "";
-      this.stat.colB = cats[1] ? cats[1].name : "";
-      this.stat.colX = nums[0] ? nums[0].name : "";
-      this.stat.colY = nums[1] ? nums[1].name : "";
-      this.cmp.otherId = this.datasets.find((d) => d.id !== this.currentId)?.id || "";
+      const dateLike = dt ? dt.name : (cats || []).find((c) => /日期|时间|date/i.test(c.name))?.name || "";
+      a.dateCol = dateLike;
     },
 
     async runAnalyze() {
       const a = this.ana, k = this.anaKind;
       let params = {};
       if (k === "groupby") params = { by: a.by, metrics: a.metrics.filter((m) => m.column) };
-      else if (k === "pivot") params = { index: a.index, columns: a.columns || null, values: a.values, aggfunc: a.aggfunc };
       else if (k === "corr") params = { columns: a.corrCols.length ? a.corrCols : undefined, method: a.corrMethod };
       else if (k === "histogram") params = { column: a.histCol, bins: a.bins };
       else if (k === "boxplot") params = { columns: a.boxCols.length ? a.boxCols : undefined };
       else if (k === "value_counts") params = { column: a.vcCol, top: a.top };
+      else if (k === "trend") params = { date_column: a.dateCol, value_column: a.valCol, freq: a.freq, agg: a.agg };
+      else if (k === "outliers") params = { columns: a.boxCols.length ? a.boxCols : undefined, method: a.outMethod };
       await this.doAnalyze(k, params, "📈");
-    },
-
-    async runTs() {
-      const t = this.ts;
-      let params = { date_column: t.dateCol, value_column: t.valCol, freq: t.freq, agg: t.agg };
-      if (this.tsKind === "moving_avg") params.window = t.window;
-      if (this.tsKind === "forecast") {
-        params = { date_column: t.dateCol, value_column: t.valCol, freq: t.freq, horizon: t.horizon };
-        this.busy = true;
-        try {
-          const R = await this.api("POST", `/api/datasets/${this.currentId}/forecast`, { params });
-          this.addCard({ type: "table", icon: "🔮", title: `预测（${R.best}）`, payload: R, span2: true });
-        } catch (e) { this.toast(e.message, "error"); }
-        finally { this.busy = false; }
-        return;
-      }
-      await this.doAnalyze(this.tsKind, params, "📉");
-    },
-
-    async runBiz() {
-      const b = this.biz, k = this.bizKind;
-      // 新业务模板：走专用端点，返回带特征字段的卡片
-      if (k === "funnel" || k === "cohort" || k === "cluster") {
-        const titles = { funnel: "转化漏斗", cohort: "同期群留存", cluster: "K-means 聚类" };
-        let params;
-        if (k === "funnel") {
-          params = { user_column: b.funnelUserCol, event_column: b.funnelEventCol,
-                     steps: b.funnelSteps.split(/[，,、\s]+/).map((s) => s.trim()).filter(Boolean) };
-        } else if (k === "cohort") {
-          params = { user_column: b.cohortUserCol, date_column: b.cohortDateCol,
-                     freq: b.cohortFreq, periods: b.cohortPeriods };
-        } else {
-          params = { columns: b.clusterCols, k: b.clusterK || 0, seed: 42 };
-        }
-        this.busy = true;
-        try {
-          const R = await this.api("POST", `/api/datasets/${this.currentId}/${k}`, { params });
-          this.addCard({ type: k, icon: "🎯", title: titles[k], payload: R, span2: k !== "funnel" });
-        } catch (e) { this.toast(e.message, "error"); }
-        finally { this.busy = false; }
-        return;
-      }
-      let params;
-      if (k === "rfm") params = { id_column: b.idCol, date_column: b.dateCol, value_column: b.valCol };
-      else if (k === "pareto") params = { category_column: b.catCol, value_column: b.valCol, top_n: b.topN };
-      else params = { columns: b.outCols.length ? b.outCols : undefined, method: b.outMethod };
-      await this.doAnalyze(k, params, "🎯", k === "rfm");
     },
 
     async doAnalyze(kind, params, icon, span2 = false) {
@@ -1110,12 +1175,11 @@ const app = createApp({
       try {
         const R = await this.api("POST", `/api/datasets/${this.currentId}/analyze`, { kind, params });
         const titleMap = {
-          groupby: "分组聚合", pivot: "透视表", corr: "相关性分析", histogram: "直方图",
+          groupby: "分组聚合", corr: "相关性分析", histogram: "直方图",
           boxplot: "箱线图", value_counts: "频次统计", describe: "汇总统计",
-          trend: "时间趋势", growth: "同比环比与累计", moving_avg: "移动平均",
-          rfm: "RFM 客户分层", pareto: "ABC 帕累托", outliers: "异常值检测",
+          trend: "时间趋势", outliers: "异常值检测",
         };
-        this.addCard({ type: kind === "rfm" ? "rfm" : "table", icon, title: titleMap[kind] || kind, payload: R, span2 });
+        this.addCard({ type: "table", icon, title: titleMap[kind] || kind, payload: R, span2 });
       } catch (e) { this.toast(e.message, "error"); }
       finally { this.busy = false; }
     },
@@ -1130,34 +1194,27 @@ const app = createApp({
       } catch (e) { this.toast(e.message, "error"); }
     },
 
-    // ---------- 列头快捷菜单 ----------
-    openColMenu(ev, col) {
-      this.colMenu = {
-        show: true, col: col.name,
-        x: Math.min(ev.clientX, window.innerWidth - 200),
-        y: Math.min(ev.clientY, window.innerHeight - 200),
-      };
-    },
-
+    // ---------- 列头快捷动作 ----------
     colProfile() {
       const col = this.colMenu.col;
       this.colMenu.show = false;
       this.doAnalyze("value_counts", { column: col, top: 15 }, "📊");
     },
 
-    colFilter() {
-      this.cleanSel.column = this.colMenu.col;
-      this.cleanOp = "filter_rows";
-      this.openSec.cl = true;
+    colClean() {
+      const col = this.colMenu.col;
       this.colMenu.show = false;
-      this.toast(`已把「${this.colMenu.col}」填入清洗面板的筛选条件`);
+      this.cleanSel.column = col;
+      this.cleanOp = "filter_rows";
+      this.openBottom("clean");
+      this.toast(`已把「${col}」填入清洗面板的筛选条件`);
     },
 
     colSql() {
       const col = this.colMenu.col;
       this.colMenu.show = false;
       this.sqlQuery = `SELECT "${col}", COUNT(*) AS n FROM df GROUP BY "${col}" ORDER BY n DESC LIMIT 20`;
-      this.openSec.sql = true;
+      this.openBottom("sql");
       this.runSql(false);
     },
 
@@ -1191,109 +1248,8 @@ const app = createApp({
         finally { this.busy = false; }
         return;
       }
-      const iconMap = { trend: "📉", growth: "📉", groupby: "📈", value_counts: "🥧", histogram: "📊", boxplot: "📦", corr: "🔗" };
+      const iconMap = { trend: "📉", groupby: "📈", value_counts: "🥧", histogram: "📊", boxplot: "📦", corr: "🔗" };
       await this.doAnalyze(s.kind, s.params, iconMap[s.kind] || "🎯");
-    },
-
-    // ---------- 金融分析 ----------
-    async loadFeedIndexes() {
-      try { this.feedIndexes = await this.api("GET", "/api/datafeed/indexes"); }
-      catch (e) { /* 静默 */ }
-    },
-
-    async detectFinance() {
-      try { this.finDetected = await this.api("GET", `/api/datasets/${this.currentId}/finance/detect`); }
-      catch (e) { this.finDetected = {}; }
-      if (this.finDetected.close) {
-        const p = this.profile.columns.find((c) => c.name === this.finDetected.close);
-
-      }
-    },
-
-    async fetchFeed() {
-      if (!this.feed.symbol.trim()) { this.toast("请填写股票代码或选择指数", "error"); return; }
-      this.busy = true;
-      try {
-        const j = await this.api("POST", "/api/datafeed/fetch", this.feed);
-        this.toast(`已获取「${j.meta.name}」：${j.meta.rows} 行行情`);
-        await this.refreshDatasets();
-        await this.selectDataset(j.id);
-      } catch (e) { this.toast(e.message, "error"); }
-      finally { this.busy = false; }
-    },
-
-    async createStockSample() {
-      this.busy = true;
-      try {
-        const j = await this.api("POST", "/api/finance/sample-stock");
-        this.toast(`已生成示例股票数据：${j.meta.rows} 个交易日（可离线体验全部金融功能）`);
-        await this.refreshDatasets();
-        await this.selectDataset(j.id);
-      } catch (e) { this.toast(e.message, "error"); }
-      finally { this.busy = false; }
-    },
-
-    async runFin(kind) {
-      const titles = { metrics: "收益与风险指标", kline: "K线图", benchmark: "基准对比 (CAPM)", portfolio: "投资组合" };
-      this.busy = true;
-      try {
-        let R;
-        if (kind === "metrics") {
-          R = await this.api("POST", `/api/datasets/${this.currentId}/finance/metrics`, { close: this.fin.close, rf: this.fin.rf, freq: this.fin.freq });
-          this.addCard({ type: "fin_metrics", icon: "📈", title: titles[kind], payload: R, span2: true });
-        } else if (kind === "kline") {
-          R = await this.api("POST", `/api/datasets/${this.currentId}/finance/kline`, {});
-          this.addCard({ type: "kline", icon: "🕯️", title: "K线图", payload: R, span2: true });
-        } else if (kind === "tech") {
-          const r = await this.api("POST", `/api/datasets/${this.currentId}/finance/tech-indicator`, {
-            indicator: this.finTech.indicator, n: this.finTech.n,
-          });
-          this.toast(r.message);
-          await this.afterDataChange(r.meta);
-          return;
-        } else if (kind === "benchmark") {
-          R = await this.api("POST", `/api/datasets/${this.currentId}/finance/benchmark`, { other_id: this.finBench.otherId });
-          this.addCard({ type: "capm", icon: "⚖️", title: titles[kind], payload: R, span2: true });
-        } else if (kind === "portfolio") {
-          const assets = this.finPortfolio.filter((a) => a.id).map((a) => ({ id: a.id }));
-          const weights = this.finPortfolio.filter((a) => a.id).map((a) => a.w).filter((w) => w !== null && w !== undefined && w !== "");
-          R = await this.api("POST", "/api/finance/portfolio", {
-            assets, weights: weights.length === assets.length ? weights : [], rf: this.fin.rf,
-          });
-          this.addCard({ type: "portfolio", icon: "🧺", title: titles[kind], payload: R, span2: true });
-        } else if (kind === "adf" || kind === "lb") {
-          const params = kind === "adf" ? { column: this.finTest.col, trend: this.finTest.trend } : { column: this.finTest.col };
-          R = await this.api("POST", `/api/datasets/${this.currentId}/finance/test`, { test: kind, params });
-          this.addCard({ type: "test", icon: "🔬", title: kind === "adf" ? `ADF 检验「${R.column}」` : `Ljung-Box 检验「${R.column}」`, payload: R });
-        }
-      } catch (e) { this.toast(e.message, "error"); }
-      finally { this.busy = false; }
-    },
-
-    // ---------- 统计检验 ----------
-    async runStatTest() {
-      const s = this.stat;
-      let params = {};
-      if (this.statKind === "normality") params = { column: s.col };
-      else if (this.statKind === "compare_groups") params = { group_column: s.groupCol, value_column: s.valCol };
-      else if (this.statKind === "chi2") params = { column_a: s.colA, column_b: s.colB };
-      else if (this.statKind === "corr_test") params = { column_x: s.colX, column_y: s.colY };
-      else if (this.statKind === "prop_z") params = { group_column: s.propGroupCol, success_column: s.propSuccessCol, success_value: s.propSuccessValue };
-      else if (this.statKind === "sample_size") params = { baseline: s.ssBaseline, mde: s.ssMde / 100, relative: s.ssRelative, alpha: s.ssAlpha, power: s.ssPower };
-      this.busy = true;
-      try {
-        const R = await this.api("POST", `/api/datasets/${this.currentId}/test`, { test: this.statKind, params });
-        const titleMap = {
-          normality: `正态性检验「${R.column}」`,
-          compare_groups: `组间比较：${R.value_column} 按 ${R.group_column}`,
-          chi2: `卡方独立性「${R.column_a} × ${R.column_b}」`,
-          corr_test: `相关性检验「${R.column_x} × ${R.column_y}」`,
-          prop_z: "A/B 转化率检验（两比例 z）",
-          sample_size: "A/B 样本量计算",
-        };
-        this.addCard({ type: "test", icon: "🧪", title: titleMap[this.statKind], payload: R });
-      } catch (e) { this.toast(e.message, "error"); }
-      finally { this.busy = false; }
     },
 
     // ---------- SQL 控制台 ----------
@@ -1326,17 +1282,7 @@ const app = createApp({
       finally { this.busy = false; }
     },
 
-    // ---------- 对比与采样 ----------
-    async runCompare() {
-      if (!this.cmp.otherId) { this.toast("请选择对比的数据集", "error"); return; }
-      this.busy = true;
-      try {
-        const R = await this.api("POST", `/api/datasets/${this.currentId}/compare`, { other_id: this.cmp.otherId, key: this.cmp.key });
-        this.addCard({ type: "compare", icon: "⚖️", title: "数据集对比", payload: R, span2: true });
-      } catch (e) { this.toast(e.message, "error"); }
-      finally { this.busy = false; }
-    },
-
+    // ---------- 采样 ----------
     async runSample() {
       this.busy = true;
       try {
@@ -1350,26 +1296,62 @@ const app = createApp({
       finally { this.busy = false; }
     },
 
+    // ---------- 数据体检 ----------
+    catLabel(cat) {
+      return {
+        structure: "结构", missing: "缺失", type: "类型", text: "格式",
+        category: "类别", numeric: "数值", datetime: "日期", consistency: "一致性",
+      }[cat] || cat;
+    },
+
     async runInsights() {
       this.busy = true;
       try {
         const R = await this.api("GET", `/api/datasets/${this.currentId}/insights`);
-        this.addCard({ type: "insight", icon: "🔍", title: "一键数据洞察", payload: R, span2: true });
-        this.toast("洞察完成，详见画布卡片");
+        this.addCard({ type: "insight", icon: "🩺", title: "数据体检报告", payload: R, span2: true });
+        const n = (R.findings || []).length;
+        this.toast(n ? `体检完成：发现 ${n} 个问题，详见结果页` : "体检完成：未发现问题");
       } catch (e) { this.toast(e.message, "error"); }
       finally { this.busy = false; }
+    },
+
+    // 体检问题一键修复：把后端建议的 op+params 预填进清洗面板，用户确认后才执行
+    applyFix(fix) {
+      const p = fix.params || {};
+      const s = this.cleanSel;
+      this.cleanOp = fix.op;
+      // 重置多选字段，避免上一个操作的残留选择混入
+      s.columns = []; s.column = ""; s.dropCols = []; s.outlierCols = [];
+      switch (fix.op) {
+        case "drop_duplicates": s.columns = p.columns || []; break;
+        case "drop_columns": s.dropCols = p.columns || []; break;
+        case "drop_high_missing": s.missThreshold = p.threshold ?? 0.5; s.missAxis = p.axis || "column"; break;
+        case "cast_type": s.column = p.column || ""; s.to = p.to || "float"; s.format = p.format || ""; break;
+        case "parse_number": s.column = p.column || ""; s.percentScale = !!p.percent_scale; s.newColumn = p.new_column || ""; break;
+        case "trim_whitespace": case "normalize_text": s.columns = p.columns || []; s.emptyToNa = !!p.empty_to_na; break;
+        case "cap_outliers": case "drop_outliers": s.outlierCols = p.columns || []; s.outlierMethod = p.method || "iqr"; break;
+        case "map_values": {
+          s.column = p.column || "";
+          s.mapText = Object.entries(p.mapping || {}).map(([k, v]) => `${k}=${v}`).join("\n");
+          break;
+        }
+        case "unify_boolean_text": s.column = p.column || ""; break;
+        case "rename_columns": this.renameMap = { ...(p.mapping || {}) }; break;
+      }
+      this.openBottom("clean");
+      this.toast(`已把「${fix.label}」填入清洗面板，请检查参数后点「执行」`);
     },
 
     async loadDeep(kind) {
       this.busy = true;
       try {
         const card = [...this.cards].reverse().find((c) => c.type === "insight");
-        if (!card) { this.toast("请先运行一键洞察", "error"); return; }
+        if (!card) { this.toast("请先运行数据体检", "error"); return; }
         if (kind === "missing") {
           card.deepData = await this.api("GET", `/api/datasets/${this.currentId}/missing-matrix`);
           card.deep = "missing";
           await this.$nextTick();
-          // 洞察卡 chartDiv=false，缺失矩阵热力图单独渲染到「本卡」的深度容器
+          // 体检卡 chartDiv=false，缺失矩阵热力图单独渲染到「本卡」的深度容器
           const el = (this._deepEls || {})[card.id];
           if (el) {
             if (!this._charts) this._charts = {};
@@ -1393,26 +1375,6 @@ const app = createApp({
           card.deepData = await this.api("GET", `/api/datasets/${this.currentId}/duplicates`);
           card.deep = "dup";
         }
-      } catch (e) { this.toast(e.message, "error"); }
-      finally { this.busy = false; }
-    },
-
-    async makeReport() {
-      this.busy = true;
-      try {
-        const res = await fetch(`/api/datasets/${this.currentId}/report`, { method: "POST" });
-        if (!res.ok) {
-          let msg = "报告生成失败";
-          try { const j = await res.json(); if (j.detail) msg = String(j.detail); } catch (e) { /* ignore */ }
-          throw new Error(msg);
-        }
-        const blob = await res.blob();
-        const a = document.createElement("a");
-        a.href = URL.createObjectURL(blob);
-        a.download = (this.meta.name || "数据集") + "_分析报告.html";
-        a.click();
-        URL.revokeObjectURL(a.href);
-        this.toast("HTML 报告已生成并下载（自包含，可离线打开分享）");
       } catch (e) { this.toast(e.message, "error"); }
       finally { this.busy = false; }
     },
@@ -1460,152 +1422,7 @@ const app = createApp({
       finally { this.busy = false; }
     },
 
-    // ---------- AI ----------
-    parseMsg(text) {
-      const parts = [];
-      const re = /```(\w*)\n?([\s\S]*?)(```|$)/g;
-      let last = 0, m;
-      while ((m = re.exec(text)) !== null) {
-        if (m.index > last) parts.push({ text: text.slice(last, m.index), code: false });
-        parts.push({ text: m[2].trim(), code: true });
-        last = m.index + m[0].length;
-      }
-      if (last < text.length) parts.push({ text: text.slice(last), code: false });
-      return parts.length ? parts : [{ text, code: false }];
-    },
-
-    msgHasCode(m) { return /```/.test(m.content); },
-
-    useAiCode(m) {
-      const segs = this.parseMsg(m.content).filter((s) => s.code);
-      if (!segs.length) return;
-      this.code = segs.map((s) => s.text).join("\n\n");
-      this.openSec.tf = true;
-      this.toast("已把 AI 建议代码放入 Python 变换，请先预览运行");
-    },
-
-    async loadAiSettings() {
-      try {
-        const s = await this.api("GET", "/api/ai/settings");
-        this.aiSettings = { ...this.aiSettings, ...s };
-        this.aiConfigured = !!s.configured;  // 后端统一判定（掩码 key 也会被正确识别为已配置）
-      } catch (e) { /* 后端未就绪时静默 */ }
-    },
-
-    async saveAiSettings() {
-      try {
-        const s = await this.api("PUT", "/api/ai/settings", this.aiSettings);
-        this.aiConfigured = !!s.configured;
-        this.aiSettingsOpen = false;
-        this.toast(this.aiConfigured ? "已连接，可以开始提问了" : "已保存（填全 Key / 地址 / 模型后启用）");
-      } catch (e) { this.toast(e.message, "error"); }
-    },
-
-    async sendAi(e) {
-      if (e && e.isComposing) return;  // 中文输入法组词回车不发送
-      if (this.aiStreaming) { this.aiAbort && this.aiAbort.abort(); return; }
-      const q = this.aiInput.trim();
-      if (!q) return;
-      if (!this.currentId) {
-        this.toast("请先在左侧选择一个数据集——AI 回答需要数据上下文", "error");
-        return;
-      }
-      this.aiInput = "";
-      this.resetInputHeight();
-      this.aiMessages.push({ role: "user", content: q });
-      await this.aiStream(q);
-    },
-
-    // SSE 流式对话：LLM 出意图 → 后端本地执行工具 → 结果卡回填数据页
-    async aiStream(text) {
-      this.aiStreaming = true;
-      this.busy = true;
-      const ctrl = new AbortController();
-      this.aiAbort = ctrl;
-      let assistant = null, reader = null;
-      // 思考态气泡：发送→首个 token 之间给用户明确反馈（建连+LLM 首 token 可能数秒）
-      const thinkMsg = { role: "tool", kind: "thinking", content: "正在思考…", spinner: true };
-      this.aiMessages.push(thinkMsg);
-      const dropThinking = () => {
-        const idx = this.aiMessages.indexOf(thinkMsg);
-        if (idx >= 0) this.aiMessages.splice(idx, 1);
-      };
-      const ensure = () => {
-        dropThinking();  // 首个正文 token 到达：思考结束，进入回复
-        if (!assistant) { assistant = { role: "assistant", content: "" }; this.aiMessages.push(assistant); }
-        return assistant;
-      };
-      try {
-        const resp = await fetch("/api/ai/chat/stream", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ dataset_id: this.currentId, message: text, session_id: this.aiSessionId }),
-          signal: ctrl.signal,
-        });
-        if (!resp.ok || !resp.body) throw new Error(`流式连接失败（${resp.status}）`);
-        reader = resp.body.getReader();
-        const dec = new TextDecoder();
-        let buf = "", toolIdx = -1;
-        const clearSpinner = () => {
-          if (toolIdx >= 0) { this.aiMessages.splice(toolIdx, 1); toolIdx = -1; }
-        };
-        const handle = (frame) => {
-          const line = frame.split("\n").find((l) => l.startsWith("data:"));
-          if (!line) return;
-          let evt;
-          try { evt = JSON.parse(line.slice(5).trim()); } catch { return; }
-          if (evt.type === "session") { this.aiSessionId = evt.session_id; }
-          else if (evt.type === "delta") { ensure().content += evt.text || ""; this.scrollChat(); }
-          else if (evt.type === "tool_start") {
-            dropThinking();  // 有工具反馈接管状态提示
-            this.aiMessages.push({ role: "tool", content: `⏳ ${evt.label || evt.name}…`, spinner: true });
-            toolIdx = this.aiMessages.length - 1;
-            this.scrollChat();
-          } else if (evt.type === "tool_result") {
-            clearSpinner();
-            if (evt.card) {
-              this.addCard(evt.card);
-              this.aiMessages.push({ role: "tool", content: `✅ 已完成「${evt.card.title}」，结果卡已加入数据页`, card: true });
-              this.toast(`AI 已生成结果卡：${evt.card.title}`);
-            } else {  // 工具执行失败：后端回 card=null + error
-              this.aiMessages.push({ role: "tool", content: `⚠ ${evt.error || "执行失败"}（AI 会自行调整参数重试）` });
-            }
-            this.scrollChat();
-          } else if (evt.type === "note") {
-            this.aiMessages.push({ role: "tool", content: `ℹ️ ${evt.text}` });
-            this.scrollChat();
-          } else if (evt.type === "error") {
-            throw new Error(evt.message);
-          } else if (evt.type === "done") {
-            dropThinking();
-            if (assistant && !assistant.content && evt.text) assistant.content = evt.text;
-          }
-        };
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buf += dec.decode(value, { stream: true });
-          let idx;
-          while ((idx = buf.indexOf("\n\n")) >= 0) {
-            const frame = buf.slice(0, idx).trim();
-            buf = buf.slice(idx + 2);
-            if (frame) handle(frame);
-          }
-        }
-        if (buf.trim()) handle(buf.trim());
-        if (!assistant || !assistant.content) ensure().content = "（模型没有返回内容）";
-      } catch (e) {
-        const note = e.name === "AbortError" ? "⏹ 已停止生成" : "⚠ " + e.message;
-        if (assistant && assistant.content) assistant.content += `\n\n${note}`;
-        else this.aiMessages.push({ role: "assistant", content: note });
-        if (e.name !== "AbortError") this.toast(e.message, "error");
-      } finally {
-        this.aiStreaming = false;
-        this.busy = false;
-        this.aiAbort = null;
-        this.scrollChat();
-      }
-    },
-
+    // ---------- MCP ----------
     copyMcpUrl() {
       const url = this.mcpUrl;
       const done = () => this.toast(`已复制：${url}`);
@@ -1614,31 +1431,6 @@ const app = createApp({
       } else {
         this.toast(url);
       }
-    },
-
-    resetAiChat() {
-      this.aiMessages = [];
-      this.aiSessionId = "";
-    },
-
-    async askAiInsight() {
-      const card = [...this.cards].reverse().find((c) => c.type === "insight");
-      if (!card) { this.toast("请先点击「🔍 一键洞察」生成洞察结果", "error"); return; }
-      const summary = card.payload.alerts.join("\n");
-      this.aiMessages.push({ role: "user", content: `以下是对当前数据集的自动洞察结果，请用业务视角解读这些发现并给出建议行动：\n${summary}` });
-      await this.aiStream(`以下是对当前数据集的自动洞察结果，请用业务视角解读这些发现并给出建议行动：\n${summary}`);
-    },
-
-    askSuggest(q) {
-      this.aiInput = q;
-      this.sendAi();
-    },
-
-    scrollChat() {
-      this.$nextTick(() => {
-        const el = this.$refs.chatMsgs;
-        if (el) el.scrollTop = el.scrollHeight;
-      });
     },
   },
 });

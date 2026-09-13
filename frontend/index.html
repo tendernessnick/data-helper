@@ -4,10 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>数据分析小助手</title>
-<link rel="stylesheet" href="/css/style.css?v=334">
+<link rel="stylesheet" href="/css/style.css?v=418">
 </head>
 <body>
-<div id="app" v-cloak>
+<div id="app" v-cloak :class="{'drag-over': dragOver}">
 
   <!-- 顶部命令栏 -->
   <header class="topbar">
@@ -18,109 +18,74 @@
       <button class="btn" @click="openPaste" :disabled="busy">📋 粘贴数据</button>
       <button class="btn" @click="createSample" :disabled="busy">✨ 示例数据</button>
       <span class="strip-sep" style="height:22px"></span>
-      <button class="btn" :class="{primary: mainView === 'ai'}" @click="mainView = mainView === 'ai' ? 'data' : 'ai'">🤖 AI 对话</button>
+      <button class="btn ghost" @click="mcpOpen = true" title="外接聊天客户端（Cherry Studio 等）调用本软件工具">🔌 MCP</button>
       <button class="btn ghost" :title="theme === 'dark' ? '切换到亮色' : '切换到暗色'" @click="toggleTheme">{{ theme === 'dark' ? '☀️' : '🌙' }}</button>
     </div>
   </header>
 
   <div class="layout-dock">
-    <!-- 左：数据集栏 -->
+    <!-- 左：数据集栏（按项目分组） -->
     <aside class="rail">
       <div class="rail-head">
         <span class="side-title">数据集</span>
         <span class="count-badge">{{ datasets.length }}</span>
+        <button class="prj-add" @click="startNewProject" title="新建项目（把相关的表和派生表归到一起管理）">＋ 项目</button>
+      </div>
+      <div class="new-prj" v-if="creatingProject">
+        <input type="text" v-model="newProjectName" placeholder="项目名称，回车创建" ref="newPrjInput"
+               @keydown.enter="confirmNewProject" @keydown.esc="creatingProject = false">
       </div>
       <div class="rail-search" v-if="datasets.length">
         <input type="text" v-model="dsSearch" placeholder="搜索数据集">
       </div>
       <div class="ds-list">
-        <div class="ds-item" v-for="d in filteredDatasets" :key="d.id" :class="{active: d.id === currentId}" @click="selectDataset(d.id)">
-          <div class="ds-main">
-            <div class="ds-name" :title="d.name">{{ d.name }}</div>
-            <div class="ds-meta">{{ d.rows }} 行 × {{ d.cols }} 列 · {{ timeAgo(d.updated_at) }}</div>
+        <div class="prj-group" v-for="g in groupedDatasets" :key="g.id || '__ungrouped__'">
+          <div class="prj-head" :class="{active: activeProject === g.id}" @click="setActiveProject(g.id)" :title="g.id ? '点击设为导入目标项目' : '未分组的数据集'">
+            <span class="prj-caret" @click.stop="toggleProject(g.id)">{{ g.collapsed ? '▸' : '▾' }}</span>
+            <span class="prj-name">{{ g.id ? '📁 ' : '📂 ' }}{{ g.name }}</span>
+            <span class="count-badge">{{ g.items.length }}</span>
+            <template v-if="g.id">
+              <span class="prj-op" @click.stop="renameProject(g)" title="重命名项目">✎</span>
+              <span class="prj-op prj-del" @click.stop="deleteProject(g)" title="删除项目（数据集移回未分组）">🗑</span>
+            </template>
+          </div>
+          <div class="prj-items" v-show="!g.collapsed">
+            <div class="ds-item" v-for="d in g.items" :key="d.id" :class="{active: d.id === currentId}" @click="selectDataset(d.id)">
+              <div class="ds-main">
+                <div class="ds-name" :title="d.parent ? (d.name + '（派生自 ' + (parentName(d.parent) || '已删除的数据集') + '）') : d.name">
+                  <span v-if="d.parent" class="ds-derived">↳</span>{{ d.name }}
+                </div>
+                <div class="ds-meta">{{ d.rows }} 行 × {{ d.cols }} 列 · {{ timeAgo(d.updated_at) }}</div>
+              </div>
+            </div>
           </div>
         </div>
         <div class="empty" v-if="datasets.length && !filteredDatasets.length">没有匹配的数据集</div>
-        <div class="empty" v-if="!datasets.length">还没有数据集<br>导入文件 / 粘贴数据<br>或先生成示例数据</div>
+        <div class="empty" v-if="!datasets.length">还没有数据集<br>拖入文件 / 粘贴数据<br>或先生成示例数据</div>
       </div>
       <div class="rail-foot">
         <div class="hint" style="font-size:11px">数据仅保存在本机<br>程序目录 /data 文件夹</div>
       </div>
     </aside>
 
-    <!-- 中：AI 对话页（独立主视图） -->
-    <main class="canvas ai-room" v-if="mainView === 'ai'">
-      <div class="ai-head">
-        <div class="ai-head-title">
-          <b>🤖 AI 分析助手</b>
-          <span class="badge-dot" :class="{on: aiConfigured}"></span>
-          <span class="ai-head-model">{{ aiConfigured ? aiSettings.model : '未连接' }}</span>
-          <span class="ai-warn-chip" v-if="!meta.id" title="AI 回答需要数据上下文：请回数据页在左侧选择一个数据集">⚠ 未选数据集</span>
-        </div>
-        <div style="display:flex;gap:8px">
-          <button class="btn sm" @click="aiSettingsOpen = true">⚙️ 连接设置</button>
-          <button class="btn sm ghost" v-if="meta.id" @click="mainView = 'data'">← 返回数据</button>
-        </div>
-      </div>
-
-      <div class="ai-thread" ref="chatMsgs">
-        <div class="ai-welcome" v-if="!aiMessages.length">
-          <div class="ai-welcome-icon">🤖</div>
-          <h2>问问你的数据</h2>
-          <p v-if="meta.id">当前数据集：<b>{{ meta.name }}</b>（{{ meta.rows }} 行 × {{ meta.cols }} 列）——AI 会结合它的结构回答</p>
-          <p v-else>提示：先在左侧选择一个数据集，AI 回答会自动带上该数据集的结构摘要</p>
-          <div class="ai-sugs">
-            <button @click="askSuggest('哪个类别的销售额最高？为什么？')">📊 哪个类别的销售额最高？</button>
-            <button @click="askSuggest('分析各月销售额趋势，指出明显的变化点')">📉 分析各月趋势与突变点</button>
-            <button @click="askSuggest('数据有哪些质量问题？给出清洗建议')">🧹 数据质量与清洗建议</button>
-            <button @click="askSuggest('帮我写一段 pandas 代码：新增客单价列并剔除异常值')">🐍 帮我写处理代码</button>
-          </div>
-        </div>
-        <div class="ai-msg" :class="[m.role, {streaming: aiStreaming && i === aiMessages.length - 1 && m.role === 'assistant', pending: m.spinner && !m.thinking}]" v-for="(m, i) in aiMessages" :key="i">
-          <div class="who">{{ m.role === 'user' ? '我' : (m.kind === 'thinking' ? '🧠 思考' : (m.role === 'tool' ? '🔧 执行' : 'AI 助手')) }}</div>
-          <div class="bubble" :class="{thinking: m.kind === 'thinking'}">
-            <span v-if="m.kind === 'thinking'" class="dots"><i></i><i></i><i></i></span>
-            <template v-for="(seg, j) in parseMsg(m.content)" :key="j">
-              <pre v-if="seg.code">{{ seg.text }}</pre>
-              <template v-else>{{ seg.text }}</template>
-            </template>
-          </div>
-          <div class="typing-label" v-if="aiStreaming && m.role === 'assistant' && i === aiMessages.length - 1 && m.content && !m.done"><span class="pulse-dot"></span>正在回复…</div>
-          <div class="ai-msg-actions" v-if="m.card">
-            <button class="btn sm" @click="mainView = 'data'">📊 查看结果卡</button>
-          </div>
-          <div class="ai-msg-actions" v-if="m.role === 'assistant' && msgHasCode(m)">
-            <button class="btn sm" @click="useAiCode(m)">▶ 放入 Python 变换</button>
-          </div>
-        </div>
-      </div>
-
-      <div class="ai-composer">
-        <div class="chat-input">
-          <textarea v-model="aiInput" rows="1" @input="autoGrow" @keydown.enter.exact.prevent="sendAi($event)" placeholder="问点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
-          <button class="send-btn" :class="{ready: aiStreaming || aiInput.trim()}" @click="sendAi()" :disabled="!aiStreaming && !aiInput.trim()" :title="aiStreaming ? '停止生成' : '发送'">{{ aiStreaming ? "■" : "↑" }}</button>
-        </div>
-        <div class="chat-quick">
-          <button @click="askAiInsight" :disabled="busy || !meta.id" title="基于一键洞察结果生成业务解读">💡 解读洞察</button>
-          <button @click="askAiChart" :disabled="busy || !aiInput.trim()" title="把输入框的描述直接生成图表卡片">📊 描述出图</button>
-          <button v-if="aiMessages.length" class="danger" @click="resetAiChat" :disabled="busy">🗑 清空对话</button>
-        </div>
-      </div>
-    </main>
-
-    <!-- 中：画布 -->
-    <main class="canvas" v-else-if="meta.id">
-      <!-- 操作条 -->
+    <!-- 右：工作台（主区 + 底部 SQL/Python + 右侧工具栏） -->
+    <main class="workbench" v-if="meta.id">
+      <div class="wb-main">
+      <!-- 数据集操作条 -->
       <div class="ds-strip">
         <span class="ds-title">{{ meta.name }}</span>
         <span class="ds-sub">{{ meta.rows }} 行 × {{ meta.cols }} 列 · 源文件 {{ meta.original_filename }} · 上传于 {{ meta.created_at }}</span>
         <button class="btn sm" @click="renameDs">重命名</button>
+        <span style="font-size:12px;color:var(--text-2)">项目</span>
+        <select class="strip-select" :value="meta.project || ''" @change="moveDs($event.target.value)" title="移动到项目（派生表会跟着项目走）">
+          <option value="">未分组</option>
+          <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}</option>
+        </select>
         <span class="strip-sep"></span>
         <button class="btn sm" @click="undoDs" :disabled="busy">↩ 撤销</button>
         <button class="btn sm" @click="resetDs" :disabled="busy">⏮ 回滚原始</button>
         <span class="strip-sep"></span>
-        <button class="btn sm primary" @click="runInsights" :disabled="busy">🔍 一键洞察</button>
-        <button class="btn sm" @click="makeReport" :disabled="busy">📄 报告</button>
+        <button class="btn sm primary" @click="runInsights" :disabled="busy">🩺 数据体检</button>
         <button class="btn sm" @click="loadSuggestions" :disabled="busy">🎯 图表推荐</button>
         <span class="strip-sep"></span>
         <button class="btn sm" @click="exportDs('csv')">导出CSV</button>
@@ -133,1077 +98,705 @@
         </template>
       </div>
 
-      <!-- 图表推荐 chips -->
-      <div class="suggest-bar" v-if="suggestions.length">
-        <span class="label">🎯 推荐：</span>
-        <span class="sug-chip" v-for="(s, i) in suggestions" :key="i" @click="runSuggestion(s)">{{ s.title }}</span>
-        <button class="btn sm ghost" @click="suggestions = []" title="关闭推荐">✕</button>
+      <!-- 主区 tab：数据表 / 结果 -->
+      <div class="main-tabs">
+        <button :class="{on: mainTab === 'table'}" @click="mainTab = 'table'">📋 数据表</button>
+        <button :class="{on: mainTab === 'cards'}" @click="mainTab = 'cards'">📊 结果<template v-if="cards.length">（{{ cards.length }}）</template></button>
+        <div class="main-tabs-right" v-if="mainTab === 'table' && hasViewFilters">
+          <span class="filter-chip" v-for="(vals, col) in colFilters" :key="col">
+            {{ col }}：{{ vals.length }} 项 <button class="fc-x" title="清除该列筛选" @click="clearColFilter(col)">✕</button>
+          </span>
+          <button class="btn sm ghost" @click="clearAllFilters">清除全部筛选</button>
+        </div>
       </div>
 
-      <!-- 数据预览（可折叠 + 列头菜单） -->
-      <div class="preview-zone">
-        <div class="preview-head" @click="previewOpen = !previewOpen">
-          <b>📋 数据预览（{{ rowsData.total }} 行，第 {{ page }}/{{ totalPages }} 页 · 点击列名可快捷操作）</b>
-          <span class="arrow" :class="{open: previewOpen}">▶</span>
-        </div>
-        <div class="preview-body" v-show="previewOpen">
-          <div class="table-scroll" style="max-height:330px;margin-top:10px">
-            <table class="data">
+      <!-- 主区 -->
+      <div class="main-view">
+        <!-- 数据表（电子表格式：列头排序 / 下拉筛选） -->
+        <div class="table-page" v-show="mainTab === 'table'">
+          <div class="suggest-bar" v-if="suggestions.length">
+            <span class="label">🎯 推荐：</span>
+            <span class="sug-chip" v-for="(s, i) in suggestions" :key="i" @click="runSuggestion(s)">{{ s.title }}</span>
+            <button class="btn sm ghost" @click="suggestions = []" title="关闭推荐">✕</button>
+          </div>
+          <div class="table-wrap">
+            <table class="data grid-table">
               <thead>
                 <tr>
-                  <th>#</th>
-                  <th v-for="c in rowsData.columns" :key="c.name" class="sortable"
-                      @click.stop="openColMenu($event, c)">{{ c.name }}<span class="dtype">{{ c.dtype }}</span></th>
+                  <th class="rownum-col">#</th>
+                  <th v-for="c in rowsData.columns" :key="c.name" class="sortable" :class="{sorted: sortCol === c.name}">
+                    <span class="th-sort" @click.stop="toggleSort(c.name)" :title="'按 ' + c.name + ' 排序（点三次取消）'">
+                      <span class="th-name">{{ c.name }}</span>
+                      <span class="sort-ind">{{ sortCol === c.name ? (sortDir === 'asc' ? '↖' : '↘') : '↕' }}</span>
+                    </span>
+                    <span class="th-sub">
+                      <span class="dtype" :title="c.dtype"><template v-if="colMissingPct(c.name) !== null">∅{{ colMissingPct(c.name) }}% · </template>{{ dtypeShort(c.dtype) }}</span>
+                      <button class="th-menu-btn" title="筛选与列操作" @click.stop="openColMenu($event, c)">▾</button>
+                    </span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-for="(r, i) in rowsData.rows" :key="i">
-                  <td class="null">{{ (page - 1) * pageSize + i + 1 }}</td>
+                  <td class="rownum-col null">{{ (page - 1) * pageSize + i + 1 }}</td>
                   <td v-for="(v, j) in r" :key="j" :class="{num: isNumCol(j), null: v === null}">{{ fmtCell(v) }}</td>
+                </tr>
+                <tr v-if="!rowsData.rows.length">
+                  <td :colspan="rowsData.columns.length + 1" class="table-empty-tip">没有符合筛选条件的行，可清除列筛选后再试</td>
                 </tr>
               </tbody>
             </table>
           </div>
           <div class="pager">
             <button class="btn sm" :disabled="page <= 1 || busyRows" @click="page--; loadRows()">上一页</button>
-            <span>第 {{ page }} / {{ totalPages }} 页 · 共 {{ rowsData.total }} 行</span>
+            <span>第 {{ page }} / {{ totalPages }} 页 · 共 {{ rowsData.total.toLocaleString() }} 行
+              <template v-if="hasViewFilters"> / 总 {{ (rowsData.unfiltered_total || meta.rows).toLocaleString() }} 行</template>
+              <template v-if="sortCol"> · 按 {{ sortCol }} {{ sortDir === 'asc' ? '升' : '降' }}序</template>
+            </span>
             <button class="btn sm" :disabled="page >= totalPages || busyRows" @click="page++; loadRows()">下一页</button>
             <span style="margin-left:10px">每页</span>
             <select v-model.number="pageSize" @change="page = 1; loadRows()" style="width:64px">
               <option>20</option><option>50</option><option>100</option><option>200</option>
             </select>
+            <button class="btn sm ghost" v-if="hasViewFilters || sortCol" @click="resetTableView" title="清除筛选与排序">↺ 重置视图</button>
           </div>
         </div>
-      </div>
 
-      <!-- 结果画布 -->
-      <div class="cards-grid" v-if="cards.length">
-        <div class="card-item" v-for="(card, cardIdx) in cards" :key="card.id" :class="{'span-2': card.span2}">
-          <div class="card-head">
-            <div>
-              <b>{{ card.icon }} {{ card.title }}</b>
-              <span class="card-time"> {{ card.time }}</span>
-            </div>
-            <div style="display:flex;align-items:center;gap:8px">
-              <div class="segmented" v-if="card.chartDiv && card.type === 'table' && isGenericChart(card)">
-                <button v-for="ct in chartTypes" :key="ct.v" :class="{on: card.chartType === ct.v}"
-                        @click="card.chartType = ct.v; renderCardChart(card)">{{ ct.l }}</button>
-              </div>
-              <button class="btn sm ghost" v-if="card.payload.method" @click="switchCorrMethod(card)" title="切换相关系数方法">{{ card.payload.method === 'pearson' ? 'Pearson' : card.payload.method === 'spearman' ? 'Spearman' : 'Kendall' }} ⟳</button>
-              <div class="card-order">
-                <button title="上移" :disabled="cardIdx === 0" @click="moveCard(cardIdx, -1)">▲</button>
-                <button title="下移" :disabled="cardIdx === cards.length - 1" @click="moveCard(cardIdx, 1)">▼</button>
-              </div>
-              <button class="card-close" title="关闭" @click="removeCard(card)">✕</button>
-            </div>
-          </div>
-          <div class="card-body">
-            <!-- 洞察卡 -->
-            <template v-if="card.type === 'insight'">
-              <div class="score-wrap" v-if="card.payload.quality_score">
-                <div class="score-ring">
-                  <svg width="92" height="92">
-                    <circle cx="46" cy="46" r="40" fill="none" :stroke="ringTrack" stroke-width="8"/>
-                    <circle cx="46" cy="46" r="40" fill="none" :stroke="card.payload.quality_score.color"
-                            stroke-width="8" stroke-linecap="round"
-                            :stroke-dasharray="2 * Math.PI * 40"
-                            :stroke-dashoffset="2 * Math.PI * 40 * (1 - card.payload.quality_score.score / 100)"
-                            style="transition: stroke-dashoffset 1s cubic-bezier(.25,.1,.25,1)"/>
-                  </svg>
-                  <div class="score-num"><b>{{ card.payload.quality_score.score }}</b><span>质量评分</span></div>
+        <!-- 结果画布 -->
+        <div class="cards-scroll" v-show="mainTab === 'cards'">
+          <div class="cards-grid" v-if="cards.length">
+            <div class="card-item" v-for="(card, cardIdx) in cards" :key="card.id" :class="{'span-2': card.span2}">
+              <div class="card-head">
+                <div>
+                  <b>{{ card.icon }} {{ card.title }}</b>
+                  <span class="card-time"> {{ card.time }}</span>
                 </div>
-                <div class="score-desc">
-                  <b>{{ card.payload.quality_score.level }}</b> · {{ card.payload.quality_score.note }}
-                  <div v-for="(d, i) in card.payload.quality_score.deductions" :key="i" style="margin-top:2px">
-                    <span style="color:var(--orange)">−{{ d.cut }}</span> {{ d.reason }}
+                <div style="display:flex;align-items:center;gap:8px">
+                  <div class="segmented" v-if="card.chartDiv && card.type === 'table' && isGenericChart(card)">
+                    <button v-for="ct in chartTypes" :key="ct.v" :class="{on: card.chartType === ct.v}"
+                            @click="card.chartType = ct.v; renderCardChart(card)">{{ ct.l }}</button>
                   </div>
-                  <div v-if="!card.payload.quality_score.deductions.length" style="color:var(--green);margin-top:2px">无扣分项</div>
-                </div>
-              </div>
-              <div class="ins-cards">
-                <div class="ins-kcard"><span>数据行</span><b>{{ card.payload.overview.rows.toLocaleString() }}</b></div>
-                <div class="ins-kcard"><span>数据列</span><b>{{ card.payload.overview.cols }}</b></div>
-                <div class="ins-kcard"><span>重复行</span><b :style="card.payload.overview.duplicates ? 'color:var(--red)' : ''">{{ card.payload.overview.duplicates }}</b></div>
-                <div class="ins-kcard"><span>缺失占比</span><b :style="card.payload.overview.missing_pct > 10 ? 'color:var(--red)' : ''">{{ card.payload.overview.missing_pct }}%</b></div>
-                <div class="ins-kcard"><span>内存</span><b>{{ card.payload.overview.mem_mb }}MB</b></div>
-              </div>
-              <ul class="ins-alerts"><li v-for="(a, i) in card.payload.alerts" :key="i">{{ a }}</li></ul>
-              <template v-if="card.payload.quality.length">
-                <div class="ins-sec-title">🧪 数据质量</div>
-                <ul class="ins-qlist"><li v-for="(q, i) in card.payload.quality" :key="i">• {{ q.msg }}</li></ul>
-              </template>
-              <template v-if="card.payload.datetime">
-                <div class="ins-sec-title">📅 时间维度</div>
-                <div class="hint">
-                  {{ card.payload.datetime.column }}（{{ card.payload.datetime.min }} ~ {{ card.payload.datetime.max }}，{{ card.payload.datetime.span_days }} 天）：
-                  {{ card.payload.datetime.value_column }} 月度整体<b>{{ card.payload.datetime.direction }}</b>
-                  <template v-if="card.payload.datetime.change_pct !== null">（首末变化 {{ card.payload.datetime.change_pct }}%）</template>
-                  <template v-if="card.payload.datetime.big_shift">；最大环比突变：{{ card.payload.datetime.big_shift.period }}（{{ card.payload.datetime.big_shift.pct }}%）</template>
-                </div>
-              </template>
-              <template v-if="card.payload.correlations.length">
-                <div class="ins-sec-title">🔗 强相关列对</div>
-                <div class="hint" v-for="(p, i) in card.payload.correlations" :key="i">{{ p.a }} × {{ p.b }}：r = {{ p.r }}</div>
-              </template>
-              <template v-if="card.payload.numeric.length">
-                <div class="ins-sec-title">🔢 数值列概览</div>
-                <div class="table-scroll" style="max-height:210px">
-                  <table class="data">
-                    <thead><tr><th>列</th><th>最小/最大</th><th>均值/中位数</th><th>分布形态</th><th>离群值</th></tr></thead>
-                    <tbody>
-                      <tr v-for="x in card.payload.numeric" :key="x.name">
-                        <td>{{ x.name }}</td>
-                        <td class="num">{{ fmtCell(x.min) }} / {{ fmtCell(x.max) }}</td>
-                        <td class="num">{{ fmtCell(x.mean) }} / {{ fmtCell(x.median) }}</td>
-                        <td>{{ x.shape }}</td>
-                        <td class="num" :style="x.outliers ? 'color:var(--warn)' : ''">{{ x.outliers }}（{{ x.outlier_pct }}%）</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              </template>
-              <div class="deep-links">
-                <button @click="loadDeep('missing')" :disabled="busy">🧭 缺失值矩阵</button>
-                <button @click="loadDeep('dup')" :disabled="busy">🔁 重复行明细</button>
-              </div>
-              <template v-if="card.deep === 'missing' && card.deepData">
-                <div class="ins-sec-title">🧭 缺失值矩阵（行分段 × 列）</div>
-                <div class="chart-box deep-chart" style="height:260px" :ref="el => setCardDeepEl(card, el)"></div>
-              </template>
-              <template v-if="card.deep === 'dup' && card.deepData">
-                <div class="ins-sec-title">🔁 重复行明细</div>
-                <div class="result-note" style="margin-bottom:6px">{{ card.deepData.note }}</div>
-                <div class="table-scroll" style="max-height:240px">
-                  <table class="data">
-                    <thead><tr><th v-for="c in card.deepData.columns" :key="c.name">{{ c.name }}</th></tr></thead>
-                    <tbody>
-                      <tr v-for="(r, i) in card.deepData.rows" :key="i">
-                        <td v-for="(v, j) in r" :key="j" :class="{null: v === null}">{{ fmtCell(v) }}</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              </template>
-            </template>
-
-            <!-- 统计检验卡 -->
-            <template v-else-if="card.type === 'test'">
-              <div class="result-note" style="margin-bottom:9px">{{ card.payload.note }}</div>
-              <div class="test-pill" v-for="(t, i) in card.payload.tests" :key="i" :class="t.significant ? 'sig' : 'nosig'">
-                <div><span class="tname">{{ t.name }}</span><span style="color:var(--text-2);margin-left:8px" v-if="t.stat !== undefined">统计量 {{ t.stat }}</span><span v-if="t.dof !== undefined" style="color:var(--text-2)">，df={{ t.dof }}</span></div>
-                <span class="verdict" :class="t.significant ? 'sig-text' : 'nosig-text'">
-                  <template v-if="t.p === null && t.verdict">{{ t.verdict }}</template>
-                  <template v-else>p = {{ t.p }} · {{ t.significant ? '显著' : '不显著' }}</template>
-                </span>
-              </div>
-              <div class="table-scroll" style="max-height:200px" v-if="card.payload.desc && card.payload.desc_columns">
-                <table class="data">
-                  <thead><tr><th v-for="c in card.payload.desc_columns" :key="c">{{ c }}</th></tr></thead>
-                  <tbody><tr v-for="(r, i) in card.payload.desc" :key="i"><td v-for="(v, j) in r" :key="j">{{ v }}</td></tr></tbody>
-                </table>
-              </div>
-              <div class="hint" style="margin-top:8px" v-if="card.payload.cramers_v !== undefined">Cramér's V（关联强度）：<b>{{ card.payload.cramers_v }}</b></div>
-              <template v-if="card.payload.contingency">
-                <div class="detail-toggle" @click="card.showDetail = !card.showDetail">{{ card.showDetail ? '▼ 收起交叉表' : '▶ 查看交叉表' }}</div>
-                <div class="table-scroll" v-show="card.showDetail" style="max-height:240px">
-                  <table class="data">
-                    <thead><tr><th></th><th v-for="c in card.payload.contingency.col_labels" :key="c">{{ c }}</th></tr></thead>
-                    <tbody>
-                      <tr v-for="(row, i) in card.payload.contingency.values" :key="i">
-                        <td><b>{{ card.payload.contingency.row_labels[i] }}</b></td>
-                        <td v-for="(v, j) in row" :key="j" class="num">{{ v }}</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              </template>
-            </template>
-
-            <!-- RFM 卡 -->
-            <template v-else-if="card.type === 'rfm'">
-              <div class="result-note" style="margin:0 0 8px">{{ card.payload.note }}</div>
-              <div class="chart-box" style="height:280px" v-if="card.chartDiv" :ref="el => setCardEl(card, el)"></div>
-              <div class="table-scroll" style="margin-top:10px;max-height:190px">
-                <table class="data">
-                  <thead><tr><th v-for="c in card.payload.columns" :key="c.name">{{ c.name }}</th></tr></thead>
-                  <tbody>
-                    <tr v-for="(r, i) in card.payload.rows" :key="i">
-                      <td v-for="(v, j) in r" :key="j" :class="{num: card.payload.columns[j] && card.payload.columns[j].numeric, null: v === null}">{{ fmtCell(v) }}</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-              <div class="detail-toggle" @click="card.showDetail = !card.showDetail">{{ card.showDetail ? '▼ 收起明细' : '▶ 展开明细' }}</div>
-              <div class="table-scroll" v-show="card.showDetail" style="max-height:280px">
-                <table class="data">
-                  <thead><tr><th v-for="c in card.payload.detail.columns" :key="c.name">{{ c.name }}</th></tr></thead>
-                  <tbody>
-                    <tr v-for="(r, i) in card.payload.detail.rows.slice(0, 200)" :key="i">
-                      <td v-for="(v, j) in r" :key="j" :class="{num: card.payload.detail.columns[j] && card.payload.detail.columns[j].numeric, null: v === null}">{{ fmtCell(v) }}</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </template>
-
-            <!-- 对比卡 -->
-            <template v-else-if="card.type === 'compare'">
-              <div class="result-note" style="margin-bottom:9px">{{ card.payload.note }}</div>
-              <div class="table-scroll" style="max-height:220px">
-                <table class="data">
-                  <thead><tr><th v-for="c in card.payload.columns" :key="c.name">{{ c.name }}</th></tr></thead>
-                  <tbody>
-                    <tr v-for="(r, i) in card.payload.rows" :key="i">
-                      <td v-for="(v, j) in r" :key="j">{{ v }}</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-              <template v-if="card.payload.stat_rows && card.payload.stat_rows.length">
-                <div class="ins-sec-title">共同数值列差异</div>
-                <div class="table-scroll" style="max-height:220px">
-                  <table class="data">
-                    <thead><tr><th v-for="c in card.payload.stat_columns" :key="c.name">{{ c.name }}</th></tr></thead>
-                    <tbody>
-                      <tr v-for="(r, i) in card.payload.stat_rows" :key="i">
-                        <td v-for="(v, j) in r" :key="j" :class="{num: j > 0}">{{ fmtCell(v) }}</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              </template>
-            </template>
-
-            <!-- 金融指标卡（收益风险 / CAPM / 组合） -->
-            <template v-else-if="card.type === 'fin_metrics' || card.type === 'capm' || card.type === 'portfolio'">
-              <div class="result-note" style="margin-bottom:9px">{{ card.payload.note }}</div>
-              <div class="chart-box" style="height:280px" v-if="card.chartDiv" :ref="el => setCardEl(card, el)"></div>
-              <div class="fin-group" v-for="(g, gi) in card.payload.groups" :key="gi">
-                <div class="ins-sec-title">{{ g.name }}</div>
-                <div class="fin-kv-grid">
-                  <div class="fin-kv" v-for="(it, ii) in g.items" :key="ii">
-                    <span>{{ it.label }}</span><b>{{ it.value }}</b>
+                  <button class="btn sm ghost" v-if="card.payload.method" @click="switchCorrMethod(card)" title="切换相关系数方法">{{ card.payload.method === 'pearson' ? 'Pearson' : card.payload.method === 'spearman' ? 'Spearman' : 'Kendall' }} ⟳</button>
+                  <div class="card-order">
+                    <button title="上移" :disabled="cardIdx === 0" @click="moveCard(cardIdx, -1)">▲</button>
+                    <button title="下移" :disabled="cardIdx === cards.length - 1" @click="moveCard(cardIdx, 1)">▼</button>
                   </div>
+                  <button class="card-close" title="关闭" @click="removeCard(card)">✕</button>
                 </div>
               </div>
-              <template v-if="card.payload.corr_matrix">
-                <div class="detail-toggle" @click="card.showDetail = !card.showDetail">{{ card.showDetail ? '▼ 收起收益相关矩阵' : '▶ 查看收益相关矩阵' }}</div>
-                <div class="table-scroll" v-show="card.showDetail" style="max-height:200px">
-                  <table class="data">
-                    <thead><tr><th></th><th v-for="c in card.payload.corr_matrix.columns" :key="c">{{ c }}</th></tr></thead>
-                    <tbody>
-                      <tr v-for="(row, i) in card.payload.corr_matrix.values" :key="i">
-                        <td><b>{{ card.payload.corr_matrix.columns[i] }}</b></td>
-                        <td v-for="(v, j) in row" :key="j" class="num">{{ v }}</td>
-                      </tr>
-                    </tbody>
-                  </table>
+              <div class="card-body">
+                <!-- 体检卡 -->
+                <template v-if="card.type === 'insight'">
+                  <div class="score-wrap" v-if="card.payload.quality_score">
+                    <div class="score-ring">
+                      <svg width="92" height="92">
+                        <circle cx="46" cy="46" r="40" fill="none" :stroke="ringTrack" stroke-width="8"/>
+                        <circle cx="46" cy="46" r="40" fill="none" :stroke="card.payload.quality_score.color"
+                                stroke-width="8" stroke-linecap="round"
+                                :stroke-dasharray="2 * Math.PI * 40"
+                                :stroke-dashoffset="2 * Math.PI * 40 * (1 - card.payload.quality_score.score / 100)"
+                                style="transition: stroke-dashoffset 1s cubic-bezier(.25,.1,.25,1)"/>
+                      </svg>
+                      <div class="score-num"><b>{{ card.payload.quality_score.score }}</b><span>质量评分</span></div>
+                    </div>
+                    <div class="score-desc">
+                      <b>{{ card.payload.quality_score.level }}</b> · {{ card.payload.quality_score.note }}
+                      <div v-for="(d, i) in card.payload.quality_score.deductions" :key="i" style="margin-top:2px">
+                        <span style="color:var(--orange)">−{{ d.cut }}</span> {{ d.reason }}
+                      </div>
+                      <div v-if="!card.payload.quality_score.deductions.length" style="color:var(--green);margin-top:2px">无扣分项</div>
+                    </div>
+                    <div class="radar-box" v-if="radarDims(card).length >= 3"
+                         :ref="el => setCardRadarEl(card, el)"></div>
+                  </div>
+                  <div class="ins-cards">
+                    <div class="ins-kcard"><span>数据行</span><b>{{ card.payload.overview.rows.toLocaleString() }}</b></div>
+                    <div class="ins-kcard"><span>数据列</span><b>{{ card.payload.overview.cols }}</b></div>
+                    <div class="ins-kcard"><span>重复行</span><b :style="card.payload.overview.duplicates ? 'color:var(--red)' : ''">{{ card.payload.overview.duplicates }}</b></div>
+                    <div class="ins-kcard"><span>缺失占比</span><b :style="card.payload.overview.missing_pct > 10 ? 'color:var(--red)' : ''">{{ card.payload.overview.missing_pct }}%</b></div>
+                    <div class="ins-kcard"><span>内存</span><b>{{ card.payload.overview.mem_mb }}MB</b></div>
+                  </div>
+                  <!-- 问题清单：每条可一键修复（预填到清洗面板） -->
+                  <template v-if="card.payload.findings && card.payload.findings.length">
+                    <div class="ins-sec-title">🩺 问题清单（{{ card.payload.findings.length }} 项<template v-if="card.payload.findings_truncated">，已截断</template>）</div>
+                    <div class="finding-item" :class="f.level" v-for="(f, fi) in card.payload.findings" :key="fi">
+                      <div class="finding-body">
+                        <div class="finding-main">
+                          <span class="finding-level">{{ f.level === 'error' ? '🔴' : (f.level === 'warn' ? '🟡' : '🔵') }}</span>
+                          <span class="finding-cat">{{ catLabel(f.category) }}</span>
+                          <span class="finding-msg">{{ f.msg }}</span>
+                        </div>
+                        <div class="finding-sub" v-if="f.detail || (f.samples && f.samples.length)">
+                          <span v-if="f.detail">{{ f.detail }}</span>
+                          <span class="finding-samples" v-if="f.samples && f.samples.length">样本：<b>{{ f.samples.join('、') }}</b></span>
+                        </div>
+                      </div>
+                      <button class="btn sm fix-btn" v-if="f.fix" @click="applyFix(f.fix)" :disabled="busy">🔧 {{ f.fix.label }}</button>
+                    </div>
+                  </template>
+                  <div class="hint" v-else style="color:var(--green);margin:6px 0">🟢 未发现问题：结构、类型、格式、缺失与异常值检查全部通过</div>
+                  <template v-if="card.payload.datetime">
+                    <div class="ins-sec-title">📅 时间维度</div>
+                    <div class="hint">
+                      {{ card.payload.datetime.column }}（{{ card.payload.datetime.min }} ~ {{ card.payload.datetime.max }}，{{ card.payload.datetime.span_days }} 天）：
+                      {{ card.payload.datetime.value_column }} 月度整体<b>{{ card.payload.datetime.direction }}</b>
+                      <template v-if="card.payload.datetime.change_pct !== null">（首末变化 {{ card.payload.datetime.change_pct }}%）</template>
+                      <template v-if="card.payload.datetime.big_shift">；最大环比突变：{{ card.payload.datetime.big_shift.period }}（{{ card.payload.datetime.big_shift.pct }}%）</template>
+                    </div>
+                  </template>
+                  <template v-if="card.payload.correlations.length">
+                    <div class="ins-sec-title">🔗 强相关列对</div>
+                    <div class="hint" v-for="(p, i) in card.payload.correlations" :key="i">{{ p.a }} × {{ p.b }}：r = {{ p.r }}</div>
+                  </template>
+                  <template v-if="card.payload.numeric.length">
+                    <div class="ins-sec-title">🔢 数值列概览</div>
+                    <div class="table-scroll" style="max-height:210px">
+                      <table class="data">
+                        <thead><tr><th>列</th><th>最小/最大</th><th>均值/中位数</th><th>分布形态</th><th>离群值</th></tr></thead>
+                        <tbody>
+                          <tr v-for="x in card.payload.numeric" :key="x.name">
+                            <td>{{ x.name }}</td>
+                            <td class="num">{{ fmtCell(x.min) }} / {{ fmtCell(x.max) }}</td>
+                            <td class="num">{{ fmtCell(x.mean) }} / {{ fmtCell(x.median) }}</td>
+                            <td>{{ x.shape }}</td>
+                            <td class="num" :style="x.outliers ? 'color:var(--warn)' : ''">{{ x.outliers }}（{{ x.outlier_pct }}%）</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </template>
+                  <div class="deep-links">
+                    <button @click="loadDeep('missing')" :disabled="busy">🧭 缺失值矩阵</button>
+                    <button @click="loadDeep('dup')" :disabled="busy">🔁 重复行明细</button>
+                  </div>
+                  <template v-if="card.deep === 'missing' && card.deepData">
+                    <div class="ins-sec-title">🧭 缺失值矩阵（行分段 × 列）</div>
+                    <div class="chart-box deep-chart" style="height:260px" :ref="el => setCardDeepEl(card, el)"></div>
+                  </template>
+                  <template v-if="card.deep === 'dup' && card.deepData">
+                    <div class="ins-sec-title">🔁 重复行明细</div>
+                    <div class="result-note" style="margin-bottom:6px">{{ card.deepData.note }}</div>
+                    <div class="table-scroll" style="max-height:240px">
+                      <table class="data">
+                        <thead><tr><th v-for="c in card.deepData.columns" :key="c.name">{{ c.name }}</th></tr></thead>
+                        <tbody>
+                          <tr v-for="(r, i) in card.deepData.rows" :key="i">
+                            <td v-for="(v, j) in r" :key="j" :class="{null: v === null}">{{ fmtCell(v) }}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </template>
+                </template>
+
+                <!-- 通用表格/图表卡 -->
+                <template v-else>
+                  <div class="result-note" style="margin:0 0 8px" v-if="card.payload.note">{{ card.payload.note }}</div>
+                  <div class="chart-box" style="height:300px" v-if="card.chartDiv" :ref="el => setCardEl(card, el)"></div>
+                  <div class="table-scroll" style="margin-top:10px;max-height:250px" v-if="card.payload.rows && card.payload.rows.length">
+                    <table class="data">
+                      <thead><tr><th v-for="c in card.payload.columns" :key="c.name">{{ c.name }}</th></tr></thead>
+                      <tbody>
+                        <tr v-for="(r, i) in card.payload.rows.slice(0, 200)" :key="i">
+                          <td v-for="(v, j) in r" :key="j" :class="{num: card.payload.columns[j] && card.payload.columns[j].numeric, null: v === null}">{{ fmtCell(v) }}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <div class="hint" v-if="card.payload.rows && card.payload.rows.length > 200" style="margin-top:6px">结果较多，仅显示前 200 行</div>
+                  <div v-if="card.payload.stdout" class="hint" style="white-space:pre-wrap;background:#0f172a;color:#e2e8f0;padding:8px 10px;border-radius:6px;margin-bottom:8px">{{ card.payload.stdout }}</div>
+                </template>
+              </div>
+              <div class="card-foot" v-if="card.payload.rows && card.payload.rows.length && card.type !== 'insight'">
+                <button class="btn sm" @click="exportCardTable(card, 'csv')">导出CSV</button>
+                <button class="btn sm" @click="exportCardTable(card, 'xlsx')">导出Excel</button>
+                <button class="btn sm" v-if="card.type === 'transform' && !card.applied" @click="applyTransformFromCard(card)" :disabled="busy">✔ 应用</button>
+              </div>
+            </div>
+          </div>
+          <div class="canvas-empty" v-else>
+            📊 结果画布<br>
+            点上方 <b>🩺 数据体检</b> 找出数据问题 · 用右侧<b>工具栏</b>清洗与统计、底部 <b>SQL / Python</b> 加工<br>
+            每次操作生成一张卡片，可同时对比多张结果
+          </div>
+        </div>
+      </div>
+
+      <!-- 底部工具面板：SQL / Python（拖条调高度 / 可折叠） -->
+      <div class="bb-resizer" v-if="!bottomCollapsed" @mousedown="startResize" @dblclick="resetBottomH" title="按住拖动调整高度，双击复位"><span></span></div>
+      <div class="bottombar" :class="{collapsed: bottomCollapsed}" :style="bottomCollapsed ? '' : 'height:' + bottomH + 'px'">
+        <div class="bb-tabs">
+          <button v-for="t in bottomTabs" :key="t.k" :class="{on: bottomTab === t.k}" @click="switchBottomTab(t.k)">{{ t.l }}</button>
+          <div class="bb-tabs-right">
+            <button class="btn sm ghost" @click="bottomCollapsed = !bottomCollapsed" :title="bottomCollapsed ? '展开 SQL / Python 面板' : '折叠 SQL / Python 面板'">{{ bottomCollapsed ? '⌃ SQL·Py' : '⌄ 收起' }}</button>
+          </div>
+        </div>
+        <div class="bb-body" v-show="!bottomCollapsed">
+
+          <!-- 🗄️ SQL 控制台 -->
+          <div class="bb-pane sql-pane" v-show="bottomTab === 'sql'">
+            <div class="dock-hint">DuckDB 引擎：数据集注册为 <code>ds1</code>、<code>ds2</code>…（当前选中的也可用 <code>df</code>）。支持跨表 JOIN、窗口函数等标准 SQL。</div>
+            <div class="dock-hint" style="margin:4px 0 8px">
+              <span v-for="t in sqlTables" :key="t.alias" style="margin-right:8px">
+                <b>{{ t.alias }}</b>=<span style="color:var(--text-2)">{{ t.name.slice(0, 12) }}</span>
+              </span>
+            </div>
+            <textarea class="code sql" v-model="sqlQuery" spellcheck="false" placeholder="SELECT 地区, SUM(销售额) AS total FROM df GROUP BY 地区 ORDER BY total DESC"></textarea>
+            <div style="display:flex;gap:8px;margin-top:8px">
+              <button class="btn primary" style="flex:1" @click="runSql(false)" :disabled="busy">▶ 运行</button>
+              <button class="btn" style="flex:1" @click="runSql(true)" :disabled="busy" title="把查询结果保存为新数据集">💾 存为数据集</button>
+            </div>
+          </div>
+
+          <!-- 🐍 Python 变换 -->
+          <div class="bb-pane py-pane" v-show="bottomTab === 'tf'">
+            <div class="py-pane-grid">
+              <div class="py-left">
+                <div class="field"><label>代码模板</label>
+                  <select v-model="tfSample" @change="applySample">
+                    <option value="">（选择模板插入）</option>
+                    <option v-for="(s, i) in tfSamples" :key="i" :value="i">{{ s.name }}</option>
+                  </select>
                 </div>
-              </template>
-              <template v-if="card.payload.assets">
-                <div class="hint" style="margin-top:6px">权重：{{ card.payload.assets.map((a, i) => a + ' ' + (card.payload.weights[i] * 100).toFixed(0) + '%').join(' · ') }}</div>
-              </template>
-            </template>
-
-            <!-- 通用表格/图表卡 -->
-            <template v-else>
-              <div class="result-note" style="margin:0 0 8px" v-if="card.payload.note">{{ card.payload.note }}</div>
-              <div class="chart-box" style="height:300px" v-if="card.chartDiv" :ref="el => setCardEl(card, el)"></div>
-              <div class="table-scroll" style="margin-top:10px;max-height:250px" v-if="card.payload.rows && card.payload.rows.length">
-                <table class="data">
-                  <thead><tr><th v-for="c in card.payload.columns" :key="c.name">{{ c.name }}</th></tr></thead>
-                  <tbody>
-                    <tr v-for="(r, i) in card.payload.rows.slice(0, 200)" :key="i">
-                      <td v-for="(v, j) in r" :key="j" :class="{num: card.payload.columns[j] && card.payload.columns[j].numeric, null: v === null}">{{ fmtCell(v) }}</td>
-                    </tr>
-                  </tbody>
-                </table>
+                <div class="dock-hint">直接使用 <b>df</b>（当前数据）、pd、np；执行后 df 即新数据。先预览再应用，上限 30 秒。</div>
+                <div style="display:flex;gap:8px;margin-top:8px">
+                  <button class="btn" style="flex:1" @click="runTransform(false)" :disabled="busy">▶ 预览运行</button>
+                  <button class="btn primary" style="flex:1" @click="runTransform(true)" :disabled="busy">✔ 应用</button>
+                </div>
               </div>
-              <div class="hint" v-if="card.payload.rows && card.payload.rows.length > 200" style="margin-top:6px">结果较多，仅显示前 200 行</div>
-              <div v-if="card.payload.stdout" class="hint" style="white-space:pre-wrap;background:#0f172a;color:#e2e8f0;padding:8px 10px;border-radius:6px;margin-bottom:8px">{{ card.payload.stdout }}</div>
-            </template>
-          </div>
-          <div class="card-foot" v-if="card.payload.rows && card.payload.rows.length && !['insight','test'].includes(card.type)">
-            <button class="btn sm" @click="exportCardTable(card, 'csv')">导出CSV</button>
-            <button class="btn sm" @click="exportCardTable(card, 'xlsx')">导出Excel</button>
-            <button class="btn sm" v-if="card.type === 'transform' && !card.applied" @click="applyTransformFromCard(card)" :disabled="busy">✔ 应用</button>
+              <textarea class="code" v-model="code" spellcheck="false"></textarea>
+            </div>
           </div>
         </div>
       </div>
-      <div class="canvas-empty" v-else>
-        🎨 结果画布<br>
-        从右侧<b>工具坞</b>执行分析 · 或点上方 <b>🔍 一键洞察</b> / <b>🎯 图表推荐</b><br>
-        每次分析生成一张卡片，可同时对比多张结果
-      </div>
-    </main>
+      </div><!-- /wb-main -->
 
-    <!-- 欢迎页 -->
-    <main class="canvas welcome" v-else>
-      <div class="welcome-inner">
-        <h1>📊 数据分析小助手</h1>
-        <p>本地运行 · 数据不出本机 · 导入 → 洞察 → 分析 → 建模 → 报告</p>
-        <div class="feature-grid">
-          <div class="feature"><div class="fi">📥</div><b>多格式导入</b><span>CSV / Excel / JSON / 粘贴，多工作表，自动识别编码</span></div>
-          <div class="feature"><div class="fi">🔍</div><b>一键洞察</b><span>数据质量体检、分布、趋势、相关性一气呵成</span></div>
-          <div class="feature"><div class="fi">🗄️</div><b>SQL 控制台</b><span>用标准 SQL 查询数据集，支持跨表 JOIN</span></div>
-          <div class="feature"><div class="fi">🧪</div><b>统计检验</b><span>正态性 / t 检验 / ANOVA / 卡方，自动给结论</span></div>
-          <div class="feature"><div class="fi">🔮</div><b>时序预测</b><span>趋势/平滑/季节三法回测选优，含置信区间</span></div>
-          <div class="feature"><div class="fi">🎯</div><b>业务模板</b><span>RFM 客户分层 · ABC 帕累托 · 异常值检测</span></div>
+      <!-- 右侧工具栏：清洗 / 统计 / 采样 / 历史（可收起为图标栏） -->
+      <div class="wb-right" :class="{collapsed: rightCollapsed}">
+        <div class="rd-rail" v-if="rightCollapsed">
+          <button v-for="t in rightTabs" :key="t.k" :class="{on: rightTab === t.k}" @click="switchRightTab(t.k)" :title="t.l">{{ t.icon }}</button>
         </div>
-        <div style="margin-top:24px">
-          <button class="btn primary" @click="$refs.file.click()">导入第一个数据集</button>
-          <button class="btn" @click="openPaste" style="margin-left:10px">📋 粘贴数据</button>
-          <button class="btn" @click="createSample" style="margin-left:10px">生成示例数据</button>
-        </div>
-      </div>
-    </main>
-
-    <!-- 右：工具坞 -->
-    <aside class="dock" v-if="meta.id">
-      <!-- 数据清洗（含列变换） -->
-      <div class="dock-sec">
-        <div class="dock-sec-head" @click="openSec.cl = !openSec.cl">
-          <b>🧹 清洗与列变换</b><span class="arrow" :class="{open: openSec.cl}">▶</span>
-        </div>
-        <div class="dock-sec-body" v-show="openSec.cl">
-          <div class="field">
-            <label>操作</label>
-            <select v-model="cleanOp">
-              <optgroup label="行级清洗">
-                <option value="drop_duplicates">删除重复行</option>
-                <option value="drop_missing">删除含缺失值的行</option>
-                <option value="fill_missing">填充缺失值</option>
-                <option value="filter_rows">按条件筛选行</option>
-                <option value="drop_outliers">剔除异常值行</option>
-              </optgroup>
-              <optgroup label="列级操作">
-                <option value="rename_columns">重命名列</option>
-                <option value="drop_columns">删除列</option>
-                <option value="cast_type">转换列类型</option>
-                <option value="bin_column">分箱（等宽/等频）</option>
-                <option value="one_hot_encode">独热编码</option>
-                <option value="standardize_column">标准化 / 归一化</option>
-                <option value="log_transform">对数变换</option>
-                <option value="extract_date_parts">提取日期成分</option>
-                <option value="regex_extract">正则提取新列</option>
-              </optgroup>
-            </select>
+        <template v-else>
+          <div class="rd-tabs">
+            <button v-for="t in rightTabs" :key="t.k" :class="{on: rightTab === t.k}" @click="rightTab = t.k">{{ t.l }}</button>
+            <button class="rd-collapse" @click="rightCollapsed = true" title="收起为图标栏">»</button>
           </div>
+          <div class="rd-body">
 
-          <div v-if="cleanOp === 'drop_duplicates'">
-            <div class="dock-hint">保留首次出现，删除完全重复（或按所选列重复）的行。</div>
-            <div class="field"><label>判定重复的列（留空=全部）</label>
-              <select v-model="cleanSel.columns" multiple size="4">
-                <option v-for="c in meta.columns" :key="c.name" :value="c.name">{{ c.name }}</option>
+          <!-- 🧹 清洗与列变换 -->
+          <div class="bb-pane" v-show="rightTab === 'clean'">
+            <div class="field clean-op-field">
+              <label>操作（22 种）</label>
+              <select v-model="cleanOp">
+                <optgroup label="行级清洗">
+                  <option value="drop_duplicates">删除重复行</option>
+                  <option value="drop_missing">删除含缺失值的行</option>
+                  <option value="fill_missing">填充缺失值</option>
+                  <option value="filter_rows">按条件筛选行</option>
+                  <option value="drop_outliers">剔除异常值行</option>
+                  <option value="cap_outliers">异常值盖帽（不删行）</option>
+                </optgroup>
+                <optgroup label="文本与格式清洗">
+                  <option value="trim_whitespace">去除首尾空格</option>
+                  <option value="normalize_text">文本规范化（全角/控制字符/空格）</option>
+                  <option value="parse_number">智能数值解析（1,234/¥/12%/万）</option>
+                  <option value="map_values">值映射（类别标准化）</option>
+                  <option value="split_column">按分隔符拆分列</option>
+                  <option value="unify_boolean_text">布尔语义统一为 是/否</option>
+                </optgroup>
+                <optgroup label="列级操作">
+                  <option value="rename_columns">重命名列</option>
+                  <option value="drop_columns">删除列</option>
+                  <option value="drop_high_missing">按缺失率删列/删行</option>
+                  <option value="cast_type">转换列类型</option>
+                  <option value="bin_column">分箱（等宽/等频）</option>
+                  <option value="one_hot_encode">独热编码</option>
+                  <option value="standardize_column">标准化 / 归一化</option>
+                  <option value="log_transform">对数变换</option>
+                  <option value="extract_date_parts">提取日期成分</option>
+                  <option value="regex_extract">正则提取新列</option>
+                </optgroup>
               </select>
             </div>
-          </div>
 
-          <div v-if="cleanOp === 'drop_missing'" class="form-row">
-            <div class="field"><label>检查的列（留空=全部）</label>
-              <select v-model="cleanSel.columns" multiple size="4">
-                <option v-for="c in meta.columns" :key="c.name" :value="c.name">{{ c.name }}</option>
-              </select>
-            </div>
-            <div class="field"><label>判定方式</label>
-              <select v-model="cleanSel.how"><option value="any">任一列空即删</option><option value="all">全部列空才删</option></select>
-            </div>
-          </div>
-
-          <div v-if="cleanOp === 'fill_missing'" class="form-row">
-            <div class="field"><label>填充的列（留空=全部）</label>
-              <select v-model="cleanSel.columns" multiple size="4">
-                <option v-for="c in meta.columns" :key="c.name" :value="c.name">{{ c.name }}</option>
-              </select>
-            </div>
-            <div class="field"><label>方式</label>
-              <select v-model="cleanSel.method">
-                <option value="constant">指定常数</option><option value="mean">均值</option>
-                <option value="median">中位数</option><option value="mode">众数</option>
-                <option value="ffill">前一行的值</option><option value="bfill">后一行的值</option>
-              </select>
-            </div>
-            <div class="field" v-if="cleanSel.method === 'constant'"><label>填充值</label>
-              <input type="text" v-model="cleanSel.value" placeholder="如 0 或 未知">
-            </div>
-          </div>
-
-          <div v-if="cleanOp === 'rename_columns'">
-            <div class="dock-hint">修改需要改名的列（留空不改）：</div>
-            <div class="form-row">
-              <div class="field" v-for="c in meta.columns" :key="c.name">
-                <label>{{ c.name }}</label>
-                <input type="text" v-model="renameMap[c.name]" :placeholder="c.name">
-              </div>
-            </div>
-          </div>
-
-          <div v-if="cleanOp === 'cast_type'" class="form-row">
-            <div class="field"><label>列</label>
-              <select v-model="cleanSel.column">
-                <option v-for="c in meta.columns" :key="c.name" :value="c.name">{{ c.name }}（{{ c.dtype }}）</option>
-              </select>
-            </div>
-            <div class="field"><label>目标类型</label>
-              <select v-model="cleanSel.to">
-                <option value="float">小数</option><option value="int">整数</option>
-                <option value="str">文本</option><option value="datetime">日期时间</option>
-              </select>
-            </div>
-            <div class="field" v-if="cleanSel.to === 'datetime'"><label>格式（可选）</label>
-              <input type="text" v-model="cleanSel.format" placeholder="%Y-%m-%d">
-            </div>
-          </div>
-
-          <div v-if="cleanOp === 'filter_rows'" class="form-row">
-            <div class="field"><label>列</label>
-              <select v-model="cleanSel.column">
-                <option v-for="c in meta.columns" :key="c.name" :value="c.name">{{ c.name }}</option>
-              </select>
-            </div>
-            <div class="field"><label>条件</label>
-              <select v-model="cleanSel.op">
-                <option value="eq">等于</option><option value="ne">不等于</option>
-                <option value="gt">大于</option><option value="ge">大于等于</option>
-                <option value="lt">小于</option><option value="le">小于等于</option>
-                <option value="contains">包含文本</option><option value="startswith">以文本开头</option>
-                <option value="between">介于两值之间</option><option value="isin">属于列表</option>
-                <option value="isnull">为空</option><option value="notnull">不为空</option>
-              </select>
-            </div>
-            <div class="field" v-if="!['isnull','notnull'].includes(cleanSel.op)"><label>值</label>
-              <input type="text" v-model="cleanSel.value" placeholder="数值或文本" v-if="cleanSel.op !== 'between'">
-              <div style="display:flex;gap:6px" v-if="cleanSel.op === 'between'">
-                <input type="text" v-model="cleanSel.value1" placeholder="最小" style="width:70px">
-                <input type="text" v-model="cleanSel.value2" placeholder="最大" style="width:70px">
-              </div>
-            </div>
-          </div>
-
-          <div v-if="cleanOp === 'drop_columns'">
-            <div class="check-grid" style="max-height:140px">
-              <label v-for="c in meta.columns" :key="c.name">
-                <input type="checkbox" :value="c.name" v-model="cleanSel.dropCols"> {{ c.name }}
-              </label>
-            </div>
-          </div>
-
-          <div v-if="cleanOp === 'drop_outliers'" class="form-row">
-            <div class="field"><label>数值列（可多选）</label>
-              <select v-model="cleanSel.outlierCols" multiple size="4">
-                <option v-for="c in numCols" :key="c.name" :value="c.name">{{ c.name }}</option>
-              </select>
-            </div>
-            <div class="field"><label>方法</label>
-              <select v-model="cleanSel.outlierMethod"><option value="iqr">IQR（四分位距）</option><option value="zscore">Z-score</option></select>
-            </div>
-          </div>
-
-          <div v-if="cleanOp === 'bin_column'" class="form-row">
-            <div class="field"><label>数值列</label>
-              <select v-model="cleanSel.column"><option v-for="c in numCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
-            </div>
-            <div class="field"><label>方式</label>
-              <select v-model="cleanSel.binMethod"><option value="equal_width">等宽</option><option value="equal_freq">等频</option></select>
-            </div>
-            <div class="field"><label>箱数</label>
-              <input type="number" v-model.number="cleanSel.bins" min="2" max="50">
-            </div>
-            <div class="field"><label>自定义标签（逗号分隔，可选）</label>
-              <input type="text" v-model="cleanSel.binLabels" placeholder="低,中,高">
-            </div>
-          </div>
-
-          <div v-if="cleanOp === 'one_hot_encode'" class="form-row">
-            <div class="field"><label>类别列</label>
-              <select v-model="cleanSel.column"><option v-for="c in catCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
-            </div>
-            <div class="field"><label>最多展开列数</label>
-              <input type="number" v-model.number="cleanSel.maxCols" min="2" max="100">
-            </div>
-          </div>
-
-          <div v-if="cleanOp === 'standardize_column'" class="form-row">
-            <div class="field"><label>数值列</label>
-              <select v-model="cleanSel.column"><option v-for="c in numCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
-            </div>
-            <div class="field"><label>方式</label>
-              <select v-model="cleanSel.stdMethod"><option value="zscore">Z-score 标准化</option><option value="minmax">Min-Max 归一化</option></select>
-            </div>
-          </div>
-
-          <div v-if="cleanOp === 'log_transform'" class="form-row">
-            <div class="field"><label>非负数值列</label>
-              <select v-model="cleanSel.column"><option v-for="c in numCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
-            </div>
-            <div class="field"><label>底数</label>
-              <select v-model="cleanSel.logBase"><option value="ln">自然对数 ln(1+x)</option><option value="log10">log10(1+x)</option></select>
-            </div>
-          </div>
-
-          <div v-if="cleanOp === 'extract_date_parts'">
-            <div class="field"><label>日期列</label>
-              <select v-model="cleanSel.column"><option v-for="c in meta.columns" :key="c.name" :value="c.name">{{ c.name }}</option></select>
-            </div>
-            <div class="check-grid">
-              <label v-for="(p, key) in dateParts" :key="key">
-                <input type="checkbox" :value="key" v-model="cleanSel.dateParts"> {{ p }}
-              </label>
-            </div>
-          </div>
-
-          <div v-if="cleanOp === 'regex_extract'" class="form-row">
-            <div class="field"><label>文本列</label>
-              <select v-model="cleanSel.column"><option v-for="c in catCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
-            </div>
-            <div class="field"><label>正则表达式（含捕获组）</label>
-              <input type="text" v-model="cleanSel.pattern" placeholder="如 SO-(\d+)">
-            </div>
-            <div class="field"><label>新列名</label>
-              <input type="text" v-model="cleanSel.newColumn" placeholder="留空自动命名">
-            </div>
-          </div>
-
-          <button class="btn primary" style="width:100%" @click="runClean" :disabled="busy">执行</button>
-        </div>
-      </div>
-
-      <!-- 统计分析 -->
-      <div class="dock-sec">
-        <div class="dock-sec-head" @click="openSec.ana = !openSec.ana">
-          <b>📈 统计分析</b><span class="arrow" :class="{open: openSec.ana}">▶</span>
-        </div>
-        <div class="dock-sec-body" v-show="openSec.ana">
-          <div class="field"><label>分析类型</label>
-            <select v-model="anaKind">
-              <option value="groupby">分组聚合</option>
-              <option value="pivot">透视表</option>
-              <option value="corr">相关性分析</option>
-              <option value="histogram">分布直方图</option>
-              <option value="boxplot">箱线图</option>
-              <option value="value_counts">频次统计</option>
-              <option value="describe">汇总统计</option>
-            </select>
-          </div>
-
-          <div v-if="anaKind === 'groupby'">
-            <div class="field"><label>分组列（可多选）</label>
-              <select v-model="ana.by" multiple size="4">
-                <option v-for="c in catCols" :key="c.name" :value="c.name">{{ c.name }}</option>
-              </select>
-            </div>
-            <label style="font-size:11px;color:var(--text-2);font-weight:600">聚合指标</label>
-            <div class="metric-row" v-for="(m, i) in ana.metrics" :key="i">
-              <select v-model="m.column">
-                <option v-for="c in meta.columns" :key="c.name" :value="c.name">{{ c.name }}</option>
-              </select>
-              <select v-model="m.agg">
-                <option v-for="a in aggs" :key="a" :value="a">{{ aggLabel(a) }}</option>
-              </select>
-              <button class="btn sm danger" v-if="ana.metrics.length > 1" @click="ana.metrics.splice(i, 1)">✕</button>
-            </div>
-            <button class="btn sm" @click="ana.metrics.push({column: numCols[0] ? numCols[0].name : '', agg: 'sum'})">+ 添加指标</button>
-          </div>
-
-          <div v-if="anaKind === 'pivot'" class="form-row">
-            <div class="field"><label>行维度</label>
-              <select v-model="ana.index"><option v-for="c in catCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
-            </div>
-            <div class="field"><label>列维度（可选）</label>
-              <select v-model="ana.columns"><option value="">（不使用）</option><option v-for="c in catCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
-            </div>
-            <div class="field"><label>数值列</label>
-              <select v-model="ana.values"><option v-for="c in numCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
-            </div>
-            <div class="field"><label>聚合方式</label>
-              <select v-model="ana.aggfunc"><option v-for="a in aggs" :key="a" :value="a">{{ aggLabel(a) }}</option></select>
-            </div>
-          </div>
-
-          <div v-if="anaKind === 'corr'" class="field">
-            <label>方法与数值列（留空=全部）</label>
-            <select v-model="ana.corrMethod" style="margin-bottom:6px">
-              <option value="pearson">Pearson（线性）</option>
-              <option value="spearman">Spearman（单调，抗离群）</option>
-              <option value="kendall">Kendall（小样本稳健）</option>
-            </select>
-            <select v-model="ana.corrCols" multiple size="4">
-              <option v-for="c in numCols" :key="c.name" :value="c.name">{{ c.name }}</option>
-            </select>
-          </div>
-
-          <div v-if="anaKind === 'histogram'" class="form-row">
-            <div class="field"><label>数值列</label>
-              <select v-model="ana.histCol"><option v-for="c in numCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
-            </div>
-            <div class="field"><label>分桶：{{ ana.bins }}</label>
-              <input type="range" min="5" max="60" v-model.number="ana.bins" style="width:100%">
-            </div>
-          </div>
-
-          <div v-if="anaKind === 'boxplot'" class="field">
-            <label>数值列（可多选，留空=全部）</label>
-            <select v-model="ana.boxCols" multiple size="4">
-              <option v-for="c in numCols" :key="c.name" :value="c.name">{{ c.name }}</option>
-            </select>
-          </div>
-
-          <div v-if="anaKind === 'value_counts'" class="form-row">
-            <div class="field"><label>列</label>
-              <select v-model="ana.vcCol"><option v-for="c in meta.columns" :key="c.name" :value="c.name">{{ c.name }}</option></select>
-            </div>
-            <div class="field"><label>Top N</label>
-              <input type="number" v-model.number="ana.top" min="1" max="100">
-            </div>
-          </div>
-
-          <div class="dock-hint" v-if="anaKind === 'describe'">对所有列输出 count / mean / std / min / 四分位 / max。</div>
-          <button class="btn primary" style="width:100%" @click="runAnalyze" :disabled="busy || !anaReady">开始分析</button>
-        </div>
-      </div>
-
-      <!-- 时间序列 -->
-      <div class="dock-sec">
-        <div class="dock-sec-head" @click="openSec.ts = !openSec.ts">
-          <b>📉 时间序列与预测</b><span class="arrow" :class="{open: openSec.ts}">▶</span>
-        </div>
-        <div class="dock-sec-body" v-show="openSec.ts">
-          <div class="field"><label>分析类型</label>
-            <select v-model="tsKind">
-              <option value="trend">基础趋势</option>
-              <option value="growth">同比 / 环比 / 累计</option>
-              <option value="moving_avg">移动平均</option>
-              <option value="forecast">🔮 预测（回测选优）</option>
-            </select>
-          </div>
-          <div class="form-row">
-            <div class="field"><label>日期列</label>
-              <select v-model="ts.dateCol">
-                <option v-for="c in meta.columns" :key="c.name" :value="c.name">{{ c.name }}</option>
-              </select>
-            </div>
-            <div class="field"><label>数值列</label>
-              <select v-model="ts.valCol"><option v-for="c in numCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
-            </div>
-          </div>
-          <div class="form-row">
-            <div class="field"><label>粒度</label>
-              <select v-model="ts.freq">
-                <option value="D">按天</option><option value="W">按周</option>
-                <option value="M">按月</option><option value="Q">按季</option><option value="Y">按年</option>
-              </select>
-            </div>
-            <div class="field" v-if="tsKind !== 'forecast'"><label>聚合方式</label>
-              <select v-model="ts.agg"><option v-for="a in aggs" :key="a" :value="a">{{ aggLabel(a) }}</option></select>
-            </div>
-            <div class="field" v-if="tsKind === 'moving_avg'"><label>窗口：{{ ts.window }}期</label>
-              <input type="range" min="2" max="12" v-model.number="ts.window" style="width:100%">
-            </div>
-            <div class="field" v-if="tsKind === 'forecast'"><label>预测期数</label>
-              <input type="number" v-model.number="ts.horizon" min="1" max="36">
-            </div>
-          </div>
-          <div class="dock-hint" v-if="tsKind === 'forecast'">自动对比 线性趋势 / 指数平滑 / 季节朴素 三种方法（留出回测 MAPE），用最优方法外推，并给出 95% 置信区间。</div>
-          <button class="btn primary" style="width:100%" @click="runTs" :disabled="busy || !(ts.dateCol && ts.valCol)">开始分析</button>
-        </div>
-      </div>
-
-      <!-- 业务模板 -->
-      <div class="dock-sec">
-        <div class="dock-sec-head" @click="openSec.biz = !openSec.biz">
-          <b>🎯 业务模板</b><span class="arrow" :class="{open: openSec.biz}">▶</span>
-        </div>
-        <div class="dock-sec-body" v-show="openSec.biz">
-          <div class="field"><label>模板</label>
-            <select v-model="bizKind">
-              <option value="rfm">RFM 客户价值分层</option>
-              <option value="pareto">ABC / 帕累托分析</option>
-              <option value="outliers">异常值检测</option>
-              <option value="funnel">转化漏斗</option>
-              <option value="cohort">同期群留存</option>
-              <option value="cluster">K-means 聚类</option>
-            </select>
-          </div>
-
-          <div v-if="bizKind === 'rfm'">
-            <div class="dock-hint">按最近消费(R)/频次(F)/金额(M)五分位打分，分 8 层客户群。</div>
-            <div class="field"><label>客户/主体列</label>
-              <select v-model="biz.idCol"><option v-for="c in catCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
-            </div>
-            <div class="field"><label>日期列</label>
-              <select v-model="biz.dateCol"><option v-for="c in meta.columns" :key="c.name" :value="c.name">{{ c.name }}</option></select>
-            </div>
-            <div class="field"><label>金额列</label>
-              <select v-model="biz.valCol"><option v-for="c in numCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
-            </div>
-          </div>
-
-          <div v-if="bizKind === 'pareto'">
-            <div class="dock-hint">找出贡献 80% 价值的关键少数（产品/客户/渠道）。</div>
-            <div class="field"><label>类别列</label>
-              <select v-model="biz.catCol"><option v-for="c in catCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
-            </div>
-            <div class="field"><label>数值列</label>
-              <select v-model="biz.valCol"><option v-for="c in numCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
-            </div>
-            <div class="field"><label>最多显示项数</label>
-              <input type="number" v-model.number="biz.topN" min="5" max="100">
-            </div>
-          </div>
-
-          <div v-if="bizKind === 'outliers'">
-            <div class="dock-hint">检测离群值；剔除请用「清洗 → 剔除异常值行」。</div>
-            <div class="field"><label>数值列（留空=全部）</label>
-              <select v-model="biz.outCols" multiple size="4">
-                <option v-for="c in numCols" :key="c.name" :value="c.name">{{ c.name }}</option>
-              </select>
-            </div>
-            <div class="field"><label>方法</label>
-              <select v-model="biz.outMethod"><option value="iqr">IQR（四分位距）</option><option value="zscore">Z-score (|z|>3)</option></select>
-            </div>
-          </div>
-
-          <div v-if="bizKind === 'funnel'">
-            <div class="dock-hint">用户完成各步骤的去重人数与转化率（到达制口径）。</div>
-            <div class="field"><label>用户/主体列</label>
-              <select v-model="biz.funnelUserCol"><option v-for="c in catCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
-            </div>
-            <div class="field"><label>事件列</label>
-              <select v-model="biz.funnelEventCol"><option v-for="c in catCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
-            </div>
-            <div class="field"><label>步骤（按顺序，逗号分隔）</label>
-              <input type="text" v-model="biz.funnelSteps" placeholder="浏览, 加购, 下单, 支付">
-            </div>
-          </div>
-
-          <div v-if="bizKind === 'cohort'">
-            <div class="dock-hint">按首次活跃时间分群，看每期还有多少用户回头。</div>
-            <div class="field"><label>用户/主体列</label>
-              <select v-model="biz.cohortUserCol"><option v-for="c in catCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
-            </div>
-            <div class="field"><label>日期列</label>
-              <select v-model="biz.cohortDateCol"><option v-for="c in meta.columns" :key="c.name" :value="c.name">{{ c.name }}</option></select>
-            </div>
-            <div class="form-row">
-              <div class="field"><label>粒度</label>
-                <select v-model="biz.cohortFreq"><option value="M">按月</option><option value="W">按周</option></select>
-              </div>
-              <div class="field"><label>期数</label>
-                <input type="number" v-model.number="biz.cohortPeriods" min="2" max="12">
-              </div>
-            </div>
-          </div>
-
-          <div v-if="bizKind === 'cluster'">
-            <div class="dock-hint">手写 K-means（k-means++ + 多重启），肘部法 + 轮廓系数自动推荐 k。</div>
-            <div class="field"><label>数值特征列（≥2 个）</label>
-              <select v-model="biz.clusterCols" multiple size="4">
-                <option v-for="c in numCols" :key="c.name" :value="c.name">{{ c.name }}</option>
-              </select>
-            </div>
-            <div class="field"><label>k（0 = 自动推荐）</label>
-              <input type="number" v-model.number="biz.clusterK" min="0" max="10">
-            </div>
-          </div>
-
-          <button class="btn primary" style="width:100%" @click="runBiz" :disabled="busy || !bizReady">开始分析</button>
-        </div>
-      </div>
-
-      <!-- 统计检验 -->
-      <div class="dock-sec">
-        <div class="dock-sec-head" @click="openSec.stat = !openSec.stat">
-          <b>🧪 统计检验</b><span class="arrow" :class="{open: openSec.stat}">▶</span>
-        </div>
-        <div class="dock-sec-body" v-show="openSec.stat">
-          <div class="field"><label>检验类型</label>
-            <select v-model="statKind">
-              <option value="normality">正态性检验（单数值列）</option>
-              <option value="compare_groups">组间比较 t / ANOVA</option>
-              <option value="chi2">卡方独立性（两类别列）</option>
-              <option value="corr_test">相关性显著性（两数值列）</option>
-              <option value="prop_z">A/B 转化率检验（两比例 z）</option>
-              <option value="sample_size">A/B 样本量计算</option>
-            </select>
-          </div>
-
-          <div v-if="statKind === 'normality'" class="field">
-            <label>数值列</label>
-            <select v-model="stat.col"><option v-for="c in numCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
-          </div>
-
-          <div v-if="statKind === 'compare_groups'" class="form-row">
-            <div class="field"><label>分组列（类别）</label>
-              <select v-model="stat.groupCol"><option v-for="c in catCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
-            </div>
-            <div class="field"><label>数值列</label>
-              <select v-model="stat.valCol"><option v-for="c in numCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
-            </div>
-          </div>
-
-          <div v-if="statKind === 'chi2'" class="form-row">
-            <div class="field"><label>类别列 A</label>
-              <select v-model="stat.colA"><option v-for="c in catCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
-            </div>
-            <div class="field"><label>类别列 B</label>
-              <select v-model="stat.colB"><option v-for="c in catCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
-            </div>
-          </div>
-
-          <div v-if="statKind === 'corr_test'" class="form-row">
-            <div class="field"><label>数值列 X</label>
-              <select v-model="stat.colX"><option v-for="c in numCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
-            </div>
-            <div class="field"><label>数值列 Y</label>
-              <select v-model="stat.colY"><option v-for="c in numCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
-            </div>
-          </div>
-
-          <div v-if="statKind === 'prop_z'">
-            <div class="dock-hint">A/B 两组各有多少人转化？差值是否超出波动范围。</div>
-            <div class="field"><label>实验分组列（恰好 2 组）</label>
-              <select v-model="stat.propGroupCol"><option v-for="c in catCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
-            </div>
-            <div class="form-row">
-              <div class="field"><label>转化事件列</label>
-                <select v-model="stat.propSuccessCol"><option v-for="c in meta.columns" :key="c.name" :value="c.name">{{ c.name }}</option></select>
-              </div>
-              <div class="field"><label>代表转化的取值</label>
-                <input type="text" v-model="stat.propSuccessValue" placeholder="如 1 或 已支付">
-              </div>
-            </div>
-          </div>
-
-          <div v-if="statKind === 'sample_size'">
-            <div class="dock-hint">实验前估算：要多大的样本量才能可靠检测出目标提升。</div>
-            <div class="form-row">
-              <div class="field"><label>基线转化率（0-1）</label>
-                <input type="number" v-model.number="stat.ssBaseline" min="0.001" max="0.999" step="0.01">
-              </div>
-              <div class="field"><label>MDE（%）</label>
-                <input type="number" v-model.number="stat.ssMde" min="0.1" step="0.5">
-              </div>
-            </div>
-            <div class="form-row">
-              <div class="field"><label>MDE 口径</label>
-                <select v-model="stat.ssRelative"><option :value="false">绝对差（pp）</option><option :value="true">相对提升（%）</option></select>
-              </div>
-              <div class="field"><label>统计效能</label>
-                <select v-model="stat.ssPower"><option value="0.8">80%</option><option value="0.9">90%</option></select>
-              </div>
-            </div>
-          </div>
-
-          <div class="dock-hint">自动给出 p 值与「是否显著」的业务结论（α=0.05）。</div>
-          <button class="btn primary" style="width:100%" @click="runStatTest" :disabled="busy || !statReady">运行检验</button>
-        </div>
-      </div>
-
-      <!-- SQL 控制台 -->
-      <div class="dock-sec">
-        <div class="dock-sec-head" @click="openSec.sql = !openSec.sql">
-          <b>🗄️ SQL 控制台</b><span class="arrow" :class="{open: openSec.sql}">▶</span>
-        </div>
-        <div class="dock-sec-body" v-show="openSec.sql">
-          <div class="dock-hint">DuckDB 引擎：数据集注册为 <code>ds1</code>、<code>ds2</code>…（最新选中的也可用 <code>df</code>）。支持跨表 JOIN、窗口函数等标准 SQL。</div>
-          <div class="dock-hint" style="margin:4px 0 8px">
-            <span v-for="t in sqlTables" :key="t.alias" style="margin-right:8px">
-              <b>{{ t.alias }}</b>=<span style="color:var(--text-2)">{{ t.name.slice(0, 12) }}</span>
-            </span>
-          </div>
-          <textarea class="code sql" v-model="sqlQuery" spellcheck="false" placeholder="SELECT 地区, SUM(销售额) AS total FROM df GROUP BY 地区 ORDER BY total DESC"></textarea>
-          <div style="display:flex;gap:8px;margin-top:8px">
-            <button class="btn primary" style="flex:1" @click="runSql(false)" :disabled="busy">▶ 运行</button>
-            <button class="btn" style="flex:1" @click="runSql(true)" :disabled="busy" title="把查询结果保存为新数据集">💾 存为数据集</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- 在线行情 -->
-      <div class="dock-sec">
-        <div class="dock-sec-head" @click="openSec.feed = !openSec.feed">
-          <b>📡 在线行情</b><span class="arrow" :class="{open: openSec.feed}">▶</span>
-        </div>
-        <div class="dock-sec-body" v-show="openSec.feed">
-          <div class="dock-hint">akshare 开源数据库（东方财富主源，失败自动切新浪）。需联网；老师的 CSV/XLSX 请用顶部「导入文件」。</div>
-          <div class="form-row">
-            <div class="field"><label>类型</label>
-              <select v-model="feed.source">
-                <option value="stock">A 股个股</option>
-                <option value="index">A 股指数</option>
-              </select>
-            </div>
-            <div class="field"><label>复权（仅个股）</label>
-              <select v-model="feed.adjust" :disabled="feed.source !== 'stock'">
-                <option value="qfq">前复权</option>
-                <option value="hfq">后复权</option>
-                <option value="none">不复权</option>
-              </select>
-            </div>
-          </div>
-          <div class="field" v-if="feed.source === 'index'"><label>常用指数</label>
-            <select v-model="feed.symbol">
-              <option v-for="ix in feedIndexes" :key="ix.symbol" :value="ix.symbol">{{ ix.name }}</option>
-            </select>
-          </div>
-          <div class="field" v-else><label>股票代码</label>
-            <input type="text" v-model="feed.symbol" placeholder="如 600519 / 000001 / 300750">
-          </div>
-          <div class="form-row">
-            <div class="field"><label>开始日期</label>
-              <input type="text" v-model="feed.start" placeholder="2024-01-01">
-            </div>
-            <div class="field"><label>结束日期</label>
-              <input type="text" v-model="feed.end" placeholder="2025-12-31">
-            </div>
-            <div class="field"><label>周期</label>
-              <select v-model="feed.period">
-                <option value="D">日线</option><option value="W">周线</option><option value="M">月线</option>
-              </select>
-            </div>
-          </div>
-          <button class="btn primary" style="width:100%" @click="fetchFeed" :disabled="busy">📥 拉取行情</button>
-          <button class="btn" style="width:100%;margin-top:6px" @click="createStockSample" :disabled="busy">✨ 生成示例股票数据（离线）</button>
-        </div>
-      </div>
-
-      <!-- 金融分析 -->
-      <div class="dock-sec">
-        <div class="dock-sec-head" @click="openSec.fin = !openSec.fin">
-          <b>💰 金融分析</b><span class="arrow" :class="{open: openSec.fin}">▶</span>
-        </div>
-        <div class="dock-sec-body" v-show="openSec.fin">
-          <div class="dock-hint" v-if="!finDetected.close">未识别到行情列（需含 日期+收盘，或中英文 开盘/最高/最低/成交量）。可先重命名列。</div>
-          <div class="field"><label>分析功能</label>
-            <select v-model="finKind">
-              <option value="metrics">📈 收益与风险指标</option>
-              <option value="kline">🕯️ K线图（MA+成交量）</option>
-              <option value="tech">🔧 生成技术指标列</option>
-              <option value="benchmark">⚖️ 基准对比 / CAPM</option>
-              <option value="portfolio">🧺 投资组合（有效前沿）</option>
-              <option value="adf">🔬 ADF 平稳性检验</option>
-              <option value="lb">🔬 Ljung-Box 自相关检验</option>
-            </select>
-          </div>
-
-          <template v-if="finKind === 'metrics'">
-            <div class="field"><label>收盘列</label>
-              <select v-model="fin.close"><option value="">（自动识别）</option><option v-for="c in numCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
-            </div>
-            <div class="form-row">
-              <div class="field"><label>无风险利率(年)</label><input type="number" v-model.number="fin.rf" step="0.005" min="0"></div>
-              <div class="field"><label>数据频率</label>
-                <select v-model="fin.freq"><option value="D">日频</option><option value="W">周频</option><option value="M">月频</option></select>
-              </div>
-            </div>
-            <button class="btn primary" style="width:100%" @click="runFin('metrics')" :disabled="busy">计算指标</button>
-          </template>
-
-          <template v-if="finKind === 'kline'">
-            <div class="dock-hint">自动识别 开盘/最高/最低/收盘/成交量 列，输出 K 线 + MA5/10/20/60 + 成交量。</div>
-            <button class="btn primary" style="width:100%" @click="runFin('kline')" :disabled="busy">绘制 K 线</button>
-          </template>
-
-          <template v-if="finKind === 'tech'">
-            <div class="form-row">
-              <div class="field"><label>指标</label>
-                <select v-model="finTech.indicator">
-                  <option value="ma">MA 移动平均</option><option value="ema">EMA 指数平均</option>
-                  <option value="macd">MACD (12,26,9)</option><option value="rsi">RSI</option>
-                  <option value="boll">BOLL 布林带</option><option value="kdj">KDJ</option>
-                  <option value="atr">ATR 真实波幅</option><option value="obv">OBV 能量潮</option>
+            <div v-if="cleanOp === 'drop_duplicates'">
+              <div class="dock-hint">保留首次出现，删除完全重复（或按所选列重复）的行。</div>
+              <div class="field"><label>判定重复的列（留空=全部）</label>
+                <select v-model="cleanSel.columns" multiple size="4">
+                  <option v-for="c in meta.columns" :key="c.name" :value="c.name">{{ c.name }}</option>
                 </select>
               </div>
-              <div class="field" v-if="['ma','ema','rsi','atr'].includes(finTech.indicator)"><label>周期 N</label>
-                <input type="number" v-model.number="finTech.n" min="2" max="250">
-              </div>
             </div>
-            <button class="btn primary" style="width:100%" @click="runFin('tech')" :disabled="busy">生成新列（可撤销）</button>
-          </template>
 
-          <template v-if="finKind === 'benchmark'">
-            <div class="dock-hint">CAPM：R资产 = α + β·R基准。基准选另一个数据集（如指数或另一只股票）。</div>
-            <div class="field"><label>基准数据集</label>
-              <select v-model="finBench.otherId">
-                <option v-for="d in datasets.filter(x => x.id !== currentId)" :key="d.id" :value="d.id">{{ d.name }}</option>
-              </select>
-            </div>
-            <button class="btn primary" style="width:100%" @click="runFin('benchmark')" :disabled="busy || !finBench.otherId">运行对比</button>
-          </template>
-
-          <template v-if="finKind === 'portfolio'">
-            <div class="dock-hint">选 2~5 个资产（数据集），各取收盘列按日期对齐。权重留空为等权。</div>
-            <div class="field" v-for="(a, i) in finPortfolio" :key="i">
-              <label>资产 {{ i + 1 }}</label>
-              <div style="display:flex;gap:6px">
-                <select v-model="a.id" style="flex:1">
-                  <option value="">（选择数据集）</option>
-                  <option v-for="d in datasets" :key="d.id" :value="d.id">{{ d.name.slice(0, 14) }}</option>
+            <div v-if="cleanOp === 'drop_missing'" class="form-row">
+              <div class="field"><label>检查的列（留空=全部）</label>
+                <select v-model="cleanSel.columns" multiple size="4">
+                  <option v-for="c in meta.columns" :key="c.name" :value="c.name">{{ c.name }}</option>
                 </select>
-                <input type="number" v-model.number="a.w" placeholder="权重" style="width:64px" min="0" step="0.1">
+              </div>
+              <div class="field"><label>判定方式</label>
+                <select v-model="cleanSel.how"><option value="any">任一列空即删</option><option value="all">全部列空才删</option></select>
               </div>
             </div>
-            <div style="display:flex;gap:8px;margin:4px 0 8px">
-              <button class="btn sm" v-if="finPortfolio.length < 5" @click="finPortfolio.push({id: '', w: null})">+ 添加资产</button>
-              <button class="btn sm danger" v-if="finPortfolio.length > 2" @click="finPortfolio.pop()">− 移除</button>
-            </div>
-            <button class="btn primary" style="width:100%" @click="runFin('portfolio')"
-                    :disabled="busy || finPortfolio.filter(a => a.id).length < 2">计算组合</button>
-          </template>
 
-          <template v-if="finKind === 'adf'">
-            <div class="form-row">
+            <div v-if="cleanOp === 'fill_missing'" class="form-row">
+              <div class="field"><label>填充的列（留空=全部）</label>
+                <select v-model="cleanSel.columns" multiple size="4">
+                  <option v-for="c in meta.columns" :key="c.name" :value="c.name">{{ c.name }}</option>
+                </select>
+              </div>
+              <div class="field"><label>方式</label>
+                <select v-model="cleanSel.method">
+                  <option value="constant">指定常数</option><option value="mean">均值</option>
+                  <option value="median">中位数</option><option value="mode">众数</option>
+                  <option value="ffill">前一行的值</option><option value="bfill">后一行的值</option>
+                  <option value="interpolate">线性插值（时序）</option>
+                </select>
+              </div>
+              <div class="field" v-if="cleanSel.method === 'constant'"><label>填充值</label>
+                <input type="text" v-model="cleanSel.value" placeholder="如 0 或 未知">
+              </div>
+            </div>
+
+            <div v-if="cleanOp === 'rename_columns'">
+              <div class="dock-hint">修改需要改名的列（留空不改）：</div>
+              <div class="form-row rename-grid">
+                <div class="field" v-for="c in meta.columns" :key="c.name">
+                  <label>{{ c.name }}</label>
+                  <input type="text" v-model="renameMap[c.name]" :placeholder="c.name">
+                </div>
+              </div>
+            </div>
+
+            <div v-if="cleanOp === 'cast_type'" class="form-row">
+              <div class="field"><label>列</label>
+                <select v-model="cleanSel.column">
+                  <option v-for="c in meta.columns" :key="c.name" :value="c.name">{{ c.name }}（{{ c.dtype }}）</option>
+                </select>
+              </div>
+              <div class="field"><label>目标类型</label>
+                <select v-model="cleanSel.to">
+                  <option value="float">小数</option><option value="int">整数</option>
+                  <option value="str">文本</option><option value="datetime">日期时间</option>
+                </select>
+              </div>
+              <div class="field" v-if="cleanSel.to === 'datetime'"><label>格式（可选）</label>
+                <input type="text" v-model="cleanSel.format" placeholder="%Y-%m-%d">
+              </div>
+            </div>
+
+            <div v-if="cleanOp === 'filter_rows'" class="form-row">
+              <div class="field"><label>列</label>
+                <select v-model="cleanSel.column">
+                  <option v-for="c in meta.columns" :key="c.name" :value="c.name">{{ c.name }}</option>
+                </select>
+              </div>
+              <div class="field"><label>条件</label>
+                <select v-model="cleanSel.op">
+                  <option value="eq">等于</option><option value="ne">不等于</option>
+                  <option value="gt">大于</option><option value="ge">大于等于</option>
+                  <option value="lt">小于</option><option value="le">小于等于</option>
+                  <option value="contains">包含文本</option><option value="startswith">以文本开头</option>
+                  <option value="between">介于两值之间</option><option value="isin">属于列表</option>
+                  <option value="isnull">为空</option><option value="notnull">不为空</option>
+                </select>
+              </div>
+              <div class="field" v-if="!['isnull','notnull'].includes(cleanSel.op)"><label>值</label>
+                <input type="text" v-model="cleanSel.value" placeholder="数值或文本" v-if="cleanSel.op !== 'between'">
+                <div style="display:flex;gap:6px" v-if="cleanSel.op === 'between'">
+                  <input type="text" v-model="cleanSel.value1" placeholder="最小" style="width:70px">
+                  <input type="text" v-model="cleanSel.value2" placeholder="最大" style="width:70px">
+                </div>
+              </div>
+            </div>
+
+            <div v-if="cleanOp === 'drop_columns'">
+              <div class="check-grid" style="max-height:140px">
+                <label v-for="c in meta.columns" :key="c.name">
+                  <input type="checkbox" :value="c.name" v-model="cleanSel.dropCols"> {{ c.name }}
+                </label>
+              </div>
+            </div>
+
+            <div v-if="cleanOp === 'drop_outliers'" class="form-row">
+              <div class="field"><label>数值列（可多选）</label>
+                <select v-model="cleanSel.outlierCols" multiple size="4">
+                  <option v-for="c in numCols" :key="c.name" :value="c.name">{{ c.name }}</option>
+                </select>
+              </div>
+              <div class="field"><label>方法</label>
+                <select v-model="cleanSel.outlierMethod"><option value="iqr">IQR（四分位距）</option><option value="zscore">Z-score</option></select>
+              </div>
+            </div>
+
+            <div v-if="cleanOp === 'cap_outliers'">
+              <div class="dock-hint">超出上下界的值截断到边界，<b>不删除任何行</b>（适合真实但极端的值）。</div>
+              <div class="form-row">
+                <div class="field"><label>数值列（可多选）</label>
+                  <select v-model="cleanSel.outlierCols" multiple size="4">
+                    <option v-for="c in numCols" :key="c.name" :value="c.name">{{ c.name }}</option>
+                  </select>
+                </div>
+                <div class="field"><label>方法</label>
+                  <select v-model="cleanSel.outlierMethod"><option value="iqr">IQR（四分位距）</option><option value="zscore">Z-score (|z|>3)</option></select>
+                </div>
+              </div>
+            </div>
+
+            <div v-if="cleanOp === 'trim_whitespace'">
+              <div class="dock-hint">去除值两端的多余空白（含全角空格、零宽字符），值内部不动。</div>
+              <div class="field"><label>文本列（可多选）</label>
+                <select v-model="cleanSel.columns" multiple size="4">
+                  <option v-for="c in catCols" :key="c.name" :value="c.name">{{ c.name }}</option>
+                </select>
+              </div>
+            </div>
+
+            <div v-if="cleanOp === 'normalize_text'">
+              <div class="dock-hint">全角转半角、去控制/乱码字符、连续空白压缩为一个空格。</div>
+              <div class="field"><label>文本列（可多选）</label>
+                <select v-model="cleanSel.columns" multiple size="4">
+                  <option v-for="c in catCols" :key="c.name" :value="c.name">{{ c.name }}</option>
+                </select>
+              </div>
+              <label class="check-inline"><input type="checkbox" v-model="cleanSel.emptyToNa"> 空字符串转为缺失值（∅）</label>
+            </div>
+
+            <div v-if="cleanOp === 'parse_number'" class="form-row">
+              <div class="field"><label>列</label>
+                <select v-model="cleanSel.column">
+                  <option v-for="c in meta.columns" :key="c.name" :value="c.name">{{ c.name }}（{{ c.dtype }}）</option>
+                </select>
+              </div>
+              <div class="field"><label>新列名（留空自动）</label>
+                <input type="text" v-model="cleanSel.newColumn" placeholder="列名_数值">
+              </div>
+              <label class="check-inline"><input type="checkbox" v-model="cleanSel.percentScale"> 12% 解析为 0.12（默认 12）</label>
+            </div>
+
+            <div v-if="cleanOp === 'map_values'">
+              <div class="dock-hint">按「原值=新值」逐行映射，未命中的值保留原样（类别标准化 / 合并同义标签）。</div>
+              <div class="form-row map-values-row">
+                <div class="field"><label>列</label>
+                  <select v-model="cleanSel.column">
+                    <option v-for="c in catCols" :key="c.name" :value="c.name">{{ c.name }}</option>
+                  </select>
+                </div>
+                <div class="field" style="flex:2"><label>映射（每行一条：原值=新值）</label>
+                  <textarea class="code" v-model="cleanSel.mapText" rows="4" spellcheck="false" placeholder="北京市=北京&#10;SHANGHAI=上海"></textarea>
+                </div>
+              </div>
+            </div>
+
+            <div v-if="cleanOp === 'split_column'" class="form-row">
+              <div class="field"><label>列</label>
+                <select v-model="cleanSel.column">
+                  <option v-for="c in catCols" :key="c.name" :value="c.name">{{ c.name }}</option>
+                </select>
+              </div>
+              <div class="field"><label>分隔符</label>
+                <input type="text" v-model="cleanSel.splitSep" placeholder="如 - 或 空格">
+              </div>
+              <div class="field"><label>新列名（逗号分隔，留空自动）</label>
+                <input type="text" v-model="cleanSel.splitInto" placeholder="省,市">
+              </div>
+            </div>
+
+            <div v-if="cleanOp === 'unify_boolean_text'">
+              <div class="dock-hint">把 true/false、yes/no、1/0、是/否 等统一为「是 / 否」。</div>
+              <div class="field"><label>列</label>
+                <select v-model="cleanSel.column">
+                  <option v-for="c in catCols" :key="c.name" :value="c.name">{{ c.name }}</option>
+                </select>
+              </div>
+            </div>
+
+            <div v-if="cleanOp === 'drop_high_missing'" class="form-row">
+              <div class="field"><label>缺失率阈值（0-1）</label>
+                <input type="number" v-model.number="cleanSel.missThreshold" min="0.05" max="1" step="0.05">
+              </div>
+              <div class="field"><label>删除对象</label>
+                <select v-model="cleanSel.missAxis">
+                  <option value="column">整列删除（列缺失率超阈值）</option>
+                  <option value="row">整行删除（行缺失率超阈值）</option>
+                </select>
+              </div>
+            </div>
+
+            <div v-if="cleanOp === 'bin_column'" class="form-row">
               <div class="field"><label>数值列</label>
-                <select v-model="finTest.col"><option v-for="c in numCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
+                <select v-model="cleanSel.column"><option v-for="c in numCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
               </div>
-              <div class="field"><label>含趋势项</label>
-                <select v-model="finTest.trend"><option :value="false">仅常数</option><option :value="true">常数+趋势</option></select>
+              <div class="field"><label>方式</label>
+                <select v-model="cleanSel.binMethod"><option value="equal_width">等宽</option><option value="equal_freq">等频</option></select>
+              </div>
+              <div class="field"><label>箱数</label>
+                <input type="number" v-model.number="cleanSel.bins" min="2" max="50">
+              </div>
+              <div class="field"><label>自定义标签（逗号分隔，可选）</label>
+                <input type="text" v-model="cleanSel.binLabels" placeholder="低,中,高">
               </div>
             </div>
-            <button class="btn primary" style="width:100%" @click="runFin('adf')" :disabled="busy || !finTest.col">运行 ADF</button>
-          </template>
 
-          <template v-if="finKind === 'lb'">
-            <div class="field"><label>数值列</label>
-              <select v-model="finTest.col"><option v-for="c in numCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
+            <div v-if="cleanOp === 'one_hot_encode'" class="form-row">
+              <div class="field"><label>类别列</label>
+                <select v-model="cleanSel.column"><option v-for="c in catCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
+              </div>
+              <div class="field"><label>最多展开列数</label>
+                <input type="number" v-model.number="cleanSel.maxCols" min="2" max="100">
+              </div>
             </div>
-            <div class="dock-hint">默认检验滞后 1/5/10/20 阶（H0：无自相关）。</div>
-            <button class="btn primary" style="width:100%" @click="runFin('lb')" :disabled="busy || !finTest.col">运行 LB 检验</button>
-          </template>
-        </div>
-      </div>
 
-      <!-- 对比与采样 -->
-      <div class="dock-sec">
-        <div class="dock-sec-head" @click="openSec.cmp = !openSec.cmp">
-          <b>⚖️ 对比与采样</b><span class="arrow" :class="{open: openSec.cmp}">▶</span>
-        </div>
-        <div class="dock-sec-body" v-show="openSec.cmp">
-          <div class="field"><label>功能</label>
-            <select v-model="cmpKind">
-              <option value="compare">数据集对比</option>
-              <option value="sample">采样为新数据集</option>
-            </select>
+            <div v-if="cleanOp === 'standardize_column'" class="form-row">
+              <div class="field"><label>数值列</label>
+                <select v-model="cleanSel.column"><option v-for="c in numCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
+              </div>
+              <div class="field"><label>方式</label>
+                <select v-model="cleanSel.stdMethod"><option value="zscore">Z-score 标准化</option><option value="minmax">Min-Max 归一化</option></select>
+              </div>
+            </div>
+
+            <div v-if="cleanOp === 'log_transform'" class="form-row">
+              <div class="field"><label>非负数值列</label>
+                <select v-model="cleanSel.column"><option v-for="c in numCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
+              </div>
+              <div class="field"><label>底数</label>
+                <select v-model="cleanSel.logBase"><option value="ln">自然对数 ln(1+x)</option><option value="log10">log10(1+x)</option></select>
+              </div>
+            </div>
+
+            <div v-if="cleanOp === 'extract_date_parts'" class="form-row">
+              <div class="field"><label>日期列</label>
+                <select v-model="cleanSel.column"><option v-for="c in meta.columns" :key="c.name" :value="c.name">{{ c.name }}</option></select>
+              </div>
+              <div class="check-grid">
+                <label v-for="(p, key) in dateParts" :key="key">
+                  <input type="checkbox" :value="key" v-model="cleanSel.dateParts"> {{ p }}
+                </label>
+              </div>
+            </div>
+
+            <div v-if="cleanOp === 'regex_extract'" class="form-row">
+              <div class="field"><label>文本列</label>
+                <select v-model="cleanSel.column"><option v-for="c in catCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
+              </div>
+              <div class="field"><label>正则表达式（含捕获组）</label>
+                <input type="text" v-model="cleanSel.pattern" placeholder="如 SO-(\d+)">
+              </div>
+              <div class="field"><label>新列名</label>
+                <input type="text" v-model="cleanSel.newColumn" placeholder="留空自动命名">
+              </div>
+            </div>
+
+            <button class="btn primary run-clean-btn" @click="runClean" :disabled="busy">执行（可撤销）</button>
           </div>
 
-          <template v-if="cmpKind === 'compare'">
-            <div class="dock-hint">对比两个数据集：列增删/类型变化/数值统计差异/键匹配情况。</div>
-            <div class="field"><label>对比数据集</label>
-              <select v-model="cmp.otherId">
-                <option v-for="d in datasets.filter(x => x.id !== currentId)" :key="d.id" :value="d.id">{{ d.name }}</option>
-              </select>
+          <!-- 📈 快速统计与图表 -->
+          <div class="bb-pane" v-show="rightTab === 'ana'">
+            <div class="field"><label>分析类型</label>
+                <select v-model="anaKind">
+                  <option value="groupby">分组聚合</option>
+                  <option value="corr">相关性分析</option>
+                  <option value="histogram">分布直方图</option>
+                  <option value="boxplot">箱线图</option>
+                  <option value="value_counts">频次统计</option>
+                  <option value="describe">汇总统计</option>
+                  <option value="trend">时间趋势</option>
+                  <option value="outliers">异常值检测</option>
+                </select>
             </div>
-            <div class="field"><label>匹配键列（可选，如 订单号）</label>
-              <select v-model="cmp.key">
-                <option value="">（不使用键）</option>
-                <option v-for="c in meta.columns" :key="c.name" :value="c.name">{{ c.name }}</option>
-              </select>
-            </div>
-            <button class="btn primary" style="width:100%" @click="runCompare" :disabled="busy || !cmp.otherId">开始对比</button>
-          </template>
 
-          <template v-if="cmpKind === 'sample'">
-            <div class="dock-hint">随机 / 分层 / 前 N 行采样，结果保存为新数据集。</div>
+            <div v-if="anaKind === 'groupby'" class="form-row">
+              <div class="field"><label>分组列（可多选）</label>
+                <select v-model="ana.by" multiple size="4">
+                  <option v-for="c in catCols" :key="c.name" :value="c.name">{{ c.name }}</option>
+                </select>
+              </div>
+              <div class="field" style="flex:2">
+                <label>聚合指标</label>
+                <div class="metric-row" v-for="(m, i) in ana.metrics" :key="i">
+                  <select v-model="m.column">
+                    <option v-for="c in meta.columns" :key="c.name" :value="c.name">{{ c.name }}</option>
+                  </select>
+                  <select v-model="m.agg">
+                    <option v-for="a in aggs" :key="a" :value="a">{{ aggLabel(a) }}</option>
+                  </select>
+                  <button class="btn sm danger" v-if="ana.metrics.length > 1" @click="ana.metrics.splice(i, 1)">✕</button>
+                </div>
+                <button class="btn sm" @click="ana.metrics.push({column: numCols[0] ? numCols[0].name : '', agg: 'sum'})">+ 添加指标</button>
+              </div>
+            </div>
+
+            <div v-if="anaKind === 'corr'" class="form-row">
+              <div class="field"><label>方法</label>
+                <select v-model="ana.corrMethod">
+                  <option value="pearson">Pearson（线性）</option>
+                  <option value="spearman">Spearman（单调，抗离群）</option>
+                  <option value="kendall">Kendall（小样本稳健）</option>
+                </select>
+              </div>
+              <div class="field"><label>数值列（留空=全部）</label>
+                <select v-model="ana.corrCols" multiple size="4">
+                  <option v-for="c in numCols" :key="c.name" :value="c.name">{{ c.name }}</option>
+                </select>
+              </div>
+            </div>
+
+            <div v-if="anaKind === 'histogram'" class="form-row">
+              <div class="field"><label>数值列</label>
+                <select v-model="ana.histCol"><option v-for="c in numCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
+              </div>
+              <div class="field"><label>分桶：{{ ana.bins }}</label>
+                <input type="range" min="5" max="60" v-model.number="ana.bins" style="width:100%">
+              </div>
+            </div>
+
+            <div v-if="anaKind === 'boxplot' || anaKind === 'outliers'" class="form-row">
+              <div class="field"><label>数值列（留空=全部）</label>
+                <select v-model="ana.boxCols" multiple size="4">
+                  <option v-for="c in numCols" :key="c.name" :value="c.name">{{ c.name }}</option>
+                </select>
+              </div>
+              <div class="field" v-if="anaKind === 'outliers'"><label>方法</label>
+                <select v-model="ana.outMethod"><option value="iqr">IQR（四分位距）</option><option value="zscore">Z-score (|z|>3)</option></select>
+              </div>
+            </div>
+
+            <div v-if="anaKind === 'value_counts'" class="form-row">
+              <div class="field"><label>列</label>
+                <select v-model="ana.vcCol"><option v-for="c in meta.columns" :key="c.name" :value="c.name">{{ c.name }}</option></select>
+              </div>
+              <div class="field"><label>Top N</label>
+                <input type="number" v-model.number="ana.top" min="1" max="100">
+              </div>
+            </div>
+
+            <div v-if="anaKind === 'trend'" class="form-row">
+              <div class="field"><label>日期列</label>
+                <select v-model="ana.dateCol"><option v-for="c in meta.columns" :key="c.name" :value="c.name">{{ c.name }}</option></select>
+              </div>
+              <div class="field"><label>数值列</label>
+                <select v-model="ana.valCol"><option v-for="c in numCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
+              </div>
+              <div class="field"><label>粒度</label>
+                <select v-model="ana.freq">
+                  <option value="D">按天</option><option value="W">按周</option>
+                  <option value="M">按月</option><option value="Q">按季</option><option value="Y">按年</option>
+                </select>
+              </div>
+              <div class="field"><label>聚合方式</label>
+                <select v-model="ana.agg"><option v-for="a in aggs" :key="a" :value="a">{{ aggLabel(a) }}</option></select>
+              </div>
+            </div>
+
+            <div class="dock-hint" v-if="anaKind === 'describe'">对所有列输出 count / mean / std / min / 四分位 / max。</div>
+            <div class="dock-hint" v-if="anaKind === 'outliers'">只检测不动数据；处理请在「清洗」里用剔除或盖帽。</div>
+
+            <div class="field run-field"><button class="btn primary" @click="runAnalyze" :disabled="busy || !anaReady">开始分析 → 结果页</button></div>
+          </div>
+
+          <!-- 🎯 采样 -->
+          <div class="bb-pane" v-show="rightTab === 'cmp'">
             <div class="form-row">
               <div class="field"><label>方式</label>
                 <select v-model="cmp.sampleMethod">
@@ -1215,57 +808,64 @@
               <div class="field"><label>每组/总共条数</label>
                 <input type="number" v-model.number="cmp.n" min="1" placeholder="100">
               </div>
+              <div class="field" v-if="cmp.sampleMethod === 'stratified'"><label>分层列</label>
+                <select v-model="cmp.by"><option v-for="c in catCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
+              </div>
+              <div class="field"><label>新数据集名称（可选）</label>
+                <input type="text" v-model="cmp.name" placeholder="自动命名">
+              </div>
+              <div class="field run-field"><button class="btn primary" @click="runSample" :disabled="busy || (cmp.sampleMethod === 'stratified' && !cmp.by)">生成采样数据集</button></div>
             </div>
-            <div class="field" v-if="cmp.sampleMethod === 'stratified'"><label>分层列</label>
-              <select v-model="cmp.by"><option v-for="c in catCols" :key="c.name" :value="c.name">{{ c.name }}</option></select>
-            </div>
-            <div class="field"><label>新数据集名称（可选）</label>
-              <input type="text" v-model="cmp.name" placeholder="自动命名">
-            </div>
-            <button class="btn primary" style="width:100%" @click="runSample" :disabled="busy || (cmp.sampleMethod === 'stratified' && !cmp.by)">生成采样</button>
-          </template>
-        </div>
-      </div>
-
-      <!-- Python 变换 -->
-      <div class="dock-sec">
-        <div class="dock-sec-head" @click="openSec.tf = !openSec.tf">
-          <b>🐍 Python 变换</b><span class="arrow" :class="{open: openSec.tf}">▶</span>
-        </div>
-        <div class="dock-sec-body" v-show="openSec.tf">
-          <div class="form-row">
-            <div class="field"><label>代码模板</label>
-              <select v-model="tfSample" @change="applySample">
-                <option value="">（选择模板插入）</option>
-                <option v-for="(s, i) in tfSamples" :key="i" :value="i">{{ s.name }}</option>
-              </select>
-            </div>
+            <div class="dock-hint">随机 / 分层 / 前 N 行采样，结果保存为新数据集（适合在千万行级数据上先抽小样本工作）。</div>
           </div>
-          <textarea class="code" v-model="code" spellcheck="false"></textarea>
-          <div class="dock-hint">直接使用 <b>df</b>（当前数据）、pd、np；执行后 df 即新数据。先预览再应用，上限 30 秒。</div>
-          <div style="display:flex;gap:8px;margin-top:6px">
-            <button class="btn" style="flex:1" @click="runTransform(false)" :disabled="busy">▶ 预览运行</button>
-            <button class="btn primary" style="flex:1" @click="runTransform(true)" :disabled="busy">✔ 应用</button>
-          </div>
-        </div>
-      </div>
 
-      <!-- 操作历史 -->
-      <div class="dock-sec">
-        <div class="dock-sec-head" @click="openSec.hist = !openSec.hist">
-          <b>🕘 操作历史（{{ meta.history.length }}）</b><span class="arrow" :class="{open: openSec.hist}">▶</span>
+          <!-- 🕘 操作历史（版本快照：任意一步可回跳） -->
+          <div class="bb-pane" v-show="rightTab === 'hist'">
+            <div class="rd-hint">共 {{ meta.history.length }} 条记录</div>
+            <ul class="timeline timeline-h">
+              <li v-for="(h, i) in [...meta.history].reverse()" :key="i"
+                  :class="{'tl-future': h.v !== undefined && h.v > versionsInfo.current, 'tl-jump': h.to_v !== undefined}">
+                <div class="tl-row">
+                  <div class="tl-time">{{ h.time }}</div>
+                  <span class="tl-tag" v-if="h.v !== undefined && h.v === versionsInfo.current">● 当前</span>
+                  <span class="tl-tag stale" v-else-if="h.to_v !== undefined">跳转</span>
+                  <span class="tl-tag stale" v-else-if="h.v !== undefined && !canJump(h.v)">快照已清理</span>
+                  <button class="btn sm ghost tl-jump-btn" v-if="h.v !== undefined && h.v !== versionsInfo.current && canJump(h.v)"
+                          @click="restoreTo(h.v)" :disabled="busy" title="数据回到这一步之后的状态（可再跳回来）">⏪ 回到这步</button>
+                </div>
+                <div class="tl-action">{{ h.action }}</div>
+                <div class="tl-detail" v-if="h.detail">{{ h.detail }}</div>
+              </li>
+            </ul>
+            <div class="dock-hint">每次清洗/变换前都会保存数据快照（最多保留 {{ maxVersions }} 份）。点「⏪ 回到这步」可回退到任意一步；回错了还能再跳回来，只有继续做新操作才会丢弃未走的分支。</div>
+          </div>
+          </div><!-- /rd-body -->
+        </template>
+      </div><!-- /wb-right -->
+    </main>
+
+    <!-- 欢迎页：极简拖拽导入 -->
+    <main class="workbench welcome-mode" v-else>
+      <div class="dropzone-wrap">
+        <div class="dropzone" :class="{over: dragOver}" @click="$refs.file.click()" title="点击选择文件">
+          <div class="dz-icon">📥</div>
+          <div class="dz-title">把数据文件拖到这里</div>
+          <div class="dz-sub">或点击选择 · 支持 CSV / Excel / JSON / TXT · 大文件自动分块导入</div>
         </div>
-        <div class="dock-sec-body" v-show="openSec.hist">
-          <ul class="timeline">
-            <li v-for="(h, i) in [...meta.history].reverse()" :key="i">
-              <div class="tl-time">{{ h.time }}</div>
-              <div class="tl-action">{{ h.action }}</div>
-              <div class="tl-detail" v-if="h.detail">{{ h.detail }}</div>
-            </li>
-          </ul>
+        <div class="dz-actions">
+          <button class="btn" @click="openPaste" :disabled="busy">📋 粘贴数据</button>
+          <button class="btn" @click="createSample" :disabled="busy">✨ 生成示例数据</button>
         </div>
+        <div class="dz-project">
+          <span>导入到项目：</span>
+          <select v-model="activeProject" title="新导入的数据集将归入所选项目；对表做采样/SQL 等派生的新表也会留在同一项目">
+            <option value="">未分组</option>
+            <option v-for="p in projects" :key="p.id" :value="p.id">📁 {{ p.name }}</option>
+          </select>
+        </div>
+        <div class="dz-hint">历史数据集在左侧列表点击即可打开 · 数据仅保存在本机</div>
       </div>
-    </aside>
+    </main>
   </div>
 
   <!-- 状态栏 -->
@@ -1282,48 +882,62 @@
     <div class="sb-right">
       <span>数据不出本机</span>
       <span class="sb-sep"></span>
-      <span>v3.0</span>
+      <span>v4.1</span>
     </div>
   </footer>
 
-  <!-- 列头快捷菜单 -->
-  <div class="col-menu" v-if="colMenu.show" :style="{left: colMenu.x + 'px', top: colMenu.y + 'px'}">
-    <div class="cm-title">{{ colMenu.col }}</div>
-    <button @click="colProfile">📊 该列画像</button>
-    <button @click="colFilter">🔽 筛选此列（填充到清洗）</button>
-    <button @click="colSql">🗄️ SQL 预览此列</button>
-    <button @click="colMenu.show = false">取消</button>
+  <!-- 列头下拉面板：排序 / 按值筛选 / 列操作 -->
+  <div class="col-menu" v-if="colMenu.show" :style="{left: colMenu.x + 'px', top: colMenu.y + 'px'}" @click.stop>
+    <div class="cm-title">
+      <b>{{ colMenu.col }}</b>
+      <span class="dtype">{{ colMenu.dtype }}<template v-if="colMissingPct(colMenu.col) !== null"> · ∅{{ colMissingPct(colMenu.col) }}%</template></span>
+    </div>
+    <div class="cm-sort">
+      <button :class="{on: sortCol === colMenu.col && sortDir === 'asc'}" @click="colSort('asc')">↖ 升序</button>
+      <button :class="{on: sortCol === colMenu.col && sortDir === 'desc'}" @click="colSort('desc')">↘ 降序</button>
+    </div>
+    <div class="cm-filter-head">按值筛选（勾选要保留的行）</div>
+    <input type="text" class="cm-search" v-model="colMenu.search" placeholder="搜索值…">
+    <div class="cm-values">
+      <template v-if="colMenu.values">
+        <label class="cm-val" v-for="v in shownColValues" :key="v.v">
+          <input type="checkbox" :value="v.v" v-model="colFilterSel"> <span class="cm-val-label">{{ v.label }}</span> <span class="cnt">{{ v.count }}</span>
+        </label>
+        <label class="cm-val null-val" v-if="colMenu.missingCount > 0">
+          <input type="checkbox" value="__NULL__" v-model="colFilterSel"> <span class="cm-val-label">∅ 缺失</span> <span class="cnt">{{ colMenu.missingCount }}</span>
+        </label>
+        <div class="hint" v-if="!colMenu.values.length && !(colMenu.missingCount > 0)">该列没有可筛选的值</div>
+        <div class="hint" v-if="colMenu.truncated">值过多，仅显示前 {{ colMenu.values.length }} 个（按频次）</div>
+      </template>
+      <div class="hint" v-else>加载列值…</div>
+    </div>
+    <div class="cm-actions">
+      <button class="primary" @click="applyColFilter" :disabled="!colMenu.values && !(colMenu.missingCount > 0)">✔ 应用筛选</button>
+      <button @click="clearColFilter(colMenu.col); colMenu.show = false" v-if="colFilters[colMenu.col]">✕ 清除该列</button>
+    </div>
+    <div class="cm-divider"></div>
+    <div class="cm-actions">
+      <button @click="colProfile">📊 该列画像</button>
+      <button @click="colClean">🧹 清洗此列…</button>
+      <button @click="colSql">🗄️ SQL 预览</button>
+    </div>
   </div>
 
-  <!-- AI 连接设置弹窗 -->
-  <div class="modal-mask" v-if="aiSettingsOpen" @click.self="aiSettingsOpen = false">
-    <div class="modal" style="width:min(480px, 92vw)">
-      <div class="modal-head"><b>🤖 AI 连接设置</b><button class="card-close" style="font-size:18px" @click="aiSettingsOpen = false">✕</button></div>
+  <!-- MCP 外接客户端弹窗 -->
+  <div class="modal-mask" v-if="mcpOpen" @click.self="mcpOpen = false">
+    <div class="modal" style="width:min(520px, 92vw)">
+      <div class="modal-head"><b>🔌 外接聊天客户端（MCP）</b><button class="card-close" style="font-size:18px" @click="mcpOpen = false">✕</button></div>
       <div class="modal-body">
-        <div class="hint" style="margin-bottom:12px">兼容 OpenAI 风格接口（智谱 GLM / DeepSeek / OpenAI 等）。<b>API Key 仅保存在本机</b>，请求直接从你的电脑发出。</div>
-        <div class="field"><label>API Base URL</label>
-          <input type="text" v-model="aiSettings.base_url" placeholder="https://open.bigmodel.cn/api/paas/v4">
+        <div class="hint" style="margin-bottom:12px">在 Cherry Studio / ChatWise 等客户端里填<b>你自己的 API Key</b>，把下面的 MCP 地址添加为工具源，客户端里的 AI 就能直接调用本软件的体检与查询工具（数据不出本机）。</div>
+        <div style="display:flex;gap:6px;align-items:center;margin-bottom:10px">
+          <code style="flex:1;font-size:12px;padding:6px 8px;background:var(--surface-3);border-radius:6px;user-select:all">{{ mcpUrl }}</code>
+          <button class="btn sm" @click="copyMcpUrl">复制</button>
         </div>
-        <div class="field"><label>模型名称</label>
-          <input type="text" v-model="aiSettings.model" placeholder="glm-4.5-flash">
-        </div>
-        <div class="field"><label>API Key</label>
-          <input type="password" v-model="aiSettings.api_key" :placeholder="aiSettings.has_key ? '已保存 ' + aiSettings.api_key + '，输入新 Key 可更换' : 'sk-...'">
-        </div>
-        <div class="hint" v-if="aiConfigured" style="color:var(--green)">● 当前已连接：<b>{{ aiSettings.model }}</b></div>
-        <div style="margin-top:14px;padding:10px 12px;border:1px dashed var(--border);border-radius:10px;background:var(--surface-2)">
-          <b style="font-size:12.5px">🔌 外接聊天客户端（MCP）</b>
-          <div class="hint" style="margin:6px 0">不想用内置对话？在 Cherry Studio / ChatWise 等客户端里填<b>你自己的 API Key</b>，并把下面的 MCP 地址添加为工具源，AI 就能直接调用本软件的分析工具（数据不出本机）：</div>
-          <div style="display:flex;gap:6px;align-items:center">
-            <code id="mcp-url" style="flex:1;font-size:12px;padding:5px 8px;background:var(--surface-3);border-radius:6px;user-select:all">{{ mcpUrl }}</code>
-            <button class="btn sm" @click="copyMcpUrl">复制</button>
-          </div>
-          <div class="hint" style="margin-top:6px">详见使用手册 docs/MCP.md（含 Cherry Studio 配置步骤）</div>
-        </div>
+        <div class="hint">旧版客户端兼容 SSE 地址：<code>{{ sseUrl }}</code></div>
+        <div class="hint" style="margin-top:6px">详见使用手册 docs/MCP.md（含 Cherry Studio 配置步骤）</div>
       </div>
       <div class="modal-foot">
-        <button class="btn" @click="aiSettingsOpen = false">取消</button>
-        <button class="btn primary" @click="saveAiSettings" :disabled="busy">保存并连接</button>
+        <button class="btn" @click="mcpOpen = false">关闭</button>
       </div>
     </div>
   </div>
@@ -1352,8 +966,8 @@
   </div>
 </div>
 
-<script src="/vendor/echarts.min.js?v=331"></script>
-<script src="/vendor/vue.global.prod.js?v=331"></script>
-<script src="/js/app.js?v=334"></script>
+<script src="/vendor/echarts.min.js?v=410"></script>
+<script src="/vendor/vue.global.prod.js?v=410"></script>
+<script src="/js/app.js?v=417"></script>
 </body>
 </html>

@@ -1,11 +1,12 @@
 """数据集本地存储。
 
 每个数据集位于 data/datasets/{id}/，包含：
-- meta.json            元信息（名称、行列数、列类型、操作历史）
-- original.*           用户上传的原始文件（用于回滚）
+- meta.json            元信息（名称、行列数、列类型、项目归属、操作历史、当前版本号）
+- original.*           用户上传的原始文件（用于回滚兜底）
 - current.parquet      当前工作副本（Parquet，仅由本程序写入和读取）
-- prev.parquet         撤销快照（只保留最近一步）
+- versions/v{n}.parquet 第 n 步操作后的数据快照（硬链接零拷贝，支持任意步回溯）
 
+项目注册表位于 data/projects.json；数据集 meta 的 project 字段为空表示未分组。
 历史版本使用 pickle（current.pkl），加载时自动迁移到 Parquet。
 """
 import io
@@ -26,8 +27,11 @@ logger = logging.getLogger(__name__)
 
 DATASETS_DIR = DATA_DIR / "datasets"
 DATASETS_DIR.mkdir(parents=True, exist_ok=True)
+PROJECTS_FILE = DATA_DIR / "projects.json"
 
 MAX_HISTORY = 200
+# 版本快照保留上限（超出淘汰最旧；对应历史条目将无法回跳）
+MAX_VERSIONS = 20
 # 原始文件超过该阈值时走流式建集（分块读 CSV 直接写 Parquet，避免整表进内存）
 STREAM_THRESHOLD_BYTES = 16 * 1024 * 1024
 STREAM_CHUNK_ROWS = 200_000
@@ -76,6 +80,75 @@ def _write_parquet(df: pd.DataFrame, path: Path) -> None:
                 out[c] = out[c].astype(str).mask(out[c].isna(), None)
         out.to_parquet(tmp)
     os.replace(tmp, path)  # 写一半崩溃不留损坏的 current
+
+
+# ---------------- 版本快照（多步回溯） ----------------
+
+def _versions_dir(d: Path) -> Path:
+    vd = d / "versions"
+    vd.mkdir(exist_ok=True)
+    return vd
+
+
+def _snapshot_versions(d: Path, v: int) -> None:
+    """把 current.parquet 存为第 v 版快照。硬链接零拷贝（文件只以 os.replace 换入新 inode，
+    永不原地改写，链接互不影响）；失败回退普通复制。"""
+    tgt = _versions_dir(d) / f"v{v}.parquet"
+    tgt.unlink(missing_ok=True)  # 同号重快照（回溯后又做新操作）
+    src = d / "current.parquet"
+    try:
+        os.link(src, tgt)
+    except OSError:
+        shutil.copy2(src, tgt)
+
+
+def _snap_versions(d: Path) -> dict:
+    """现有快照 {版本号: 路径}。"""
+    vd = d / "versions"
+    if not vd.is_dir():
+        return {}
+    out = {}
+    for p in vd.glob("v*.parquet"):
+        try:
+            out[int(p.stem[1:])] = p
+        except ValueError:
+            continue
+    return out
+
+
+def _prune_future_versions(d: Path, version: int) -> None:
+    """回溯后又做新操作：丢弃比当前版本新的快照（未走的分支）。"""
+    for n, p in _snap_versions(d).items():
+        if n > version:
+            p.unlink(missing_ok=True)
+
+
+def _evict_old_versions(d: Path) -> None:
+    """快照数超上限时淘汰最旧的。"""
+    snaps = sorted(_snap_versions(d).items())
+    extra = len(snaps) - MAX_VERSIONS
+    for n, p in snaps[:max(0, extra)]:
+        p.unlink(missing_ok=True)
+        logger.info("数据集 %s 快照 v%d 超上限淘汰", d.name, n)
+
+
+def _ensure_versions(d: Path, meta: dict) -> int:
+    """懒初始化版本号：旧数据集 meta 无 version 字段。
+    存在 prev.parquet（旧一级撤销快照）则转存为 v0，保住原有的撤销能力。
+    初始化结果立即落盘——同一请求内的后续重入（如 undo→restore）不能再丢一次。"""
+    if "version" in meta:
+        return int(meta["version"])
+    prev = d / "prev.parquet"
+    if prev.exists():
+        os.replace(prev, _versions_dir(d) / "v0.parquet")
+        meta["version"] = 1
+        if meta.get("history"):
+            meta["history"][-1]["v"] = 1  # 当前状态对应最后一条历史
+        logger.info("数据集 %s 旧 prev 快照已迁移为 v0", d.name)
+    else:
+        meta["version"] = 0
+    _write_meta(d, meta)
+    return int(meta["version"])
 
 
 def _migrate_legacy(d: Path) -> None:
@@ -175,7 +248,7 @@ def _new_ds_id() -> str:
 
 
 def create_dataset(name, df: pd.DataFrame, original_filename: str, original_bytes: bytes,
-                   action: str = "上传", detail: str = "") -> str:
+                   action: str = "上传", detail: str = "", project: str = "", parent: str = "") -> str:
     ds_id = _new_ds_id()
     with _lock:
         d = DATASETS_DIR / ds_id
@@ -183,6 +256,7 @@ def create_dataset(name, df: pd.DataFrame, original_filename: str, original_byte
         ext = Path(original_filename or "").suffix.lower() or ".bin"
         (d / f"original{ext}").write_bytes(original_bytes)
         _write_parquet(df, d / "current.parquet")
+        _snapshot_versions(d, 0)  # 初始状态快照：回滚原始 = 回到 v0，秒级完成
         sheets = _xlsx_sheets(original_bytes) if ext == ".xlsx" else None
         meta = {
             "id": ds_id,
@@ -194,11 +268,16 @@ def create_dataset(name, df: pd.DataFrame, original_filename: str, original_byte
             "cols": int(df.shape[1]),
             "columns": _columns_info(df),
             "sheets": sheets or [],
+            "project": (project or "").strip(),
+            "parent": (parent or "").strip(),
+            "version": 0,
+            "orig_snap": True,  # versions/v0 即上传原始状态
             "history": [
                 {
                     "time": _now(),
                     "action": action,
                     "detail": detail or f"{original_filename}（{len(df)} 行 × {df.shape[1]} 列）",
+                    "v": 0,
                 }
             ],
         }
@@ -242,7 +321,7 @@ def _sniff_csv(src: Path) -> tuple:
     return enc, sep
 
 
-def create_dataset_stream(name, src: Path, original_filename: str) -> str:
+def create_dataset_stream(name, src: Path, original_filename: str, project: str = "", parent: str = "") -> str:
     """大 CSV 流式建集：分块读取直接写 Parquet，内存只驻留一个 chunk。
 
     分隔符误判 / 跨 chunk 类型漂移等任何异常都整体回退到全量解析路径（正确性优先）。
@@ -286,6 +365,7 @@ def create_dataset_stream(name, src: Path, original_filename: str) -> str:
         # 先复制原始文件（保留 src 供失败回退），全部成功后才删 src
         ext = Path(original_filename or "").suffix.lower() or ".bin"
         shutil.copy2(src, d / f"original{ext}")
+        _snapshot_versions(d, 0)  # 初始状态快照：回滚原始 = 回到 v0
         meta = {
             "id": ds_id,
             "name": (name or "").strip() or Path(original_filename or "").stem or "未命名数据集",
@@ -296,11 +376,16 @@ def create_dataset_stream(name, src: Path, original_filename: str) -> str:
             "cols": cols,
             "columns": columns,
             "sheets": [],
+            "project": (project or "").strip(),
+            "parent": (parent or "").strip(),
+            "version": 0,
+            "orig_snap": True,
             "history": [
                 {
                     "time": _now(),
                     "action": "上传（流式）",
                     "detail": f"{original_filename}（{rows} 行 × {cols} 列，分块写入 Parquet）",
+                    "v": 0,
                 }
             ],
         }
@@ -314,7 +399,7 @@ def create_dataset_stream(name, src: Path, original_filename: str) -> str:
         shutil.rmtree(d, ignore_errors=True)
         raw = src.read_bytes()
         df = parse_upload(original_filename or "", raw)
-        ds_id = create_dataset(name, df, original_filename or "", raw)
+        ds_id = create_dataset(name, df, original_filename or "", raw, project=project, parent=parent)
         src.unlink(missing_ok=True)  # 回退成功同样消费掉源文件（解析失败则保留）
         return ds_id
 
@@ -348,52 +433,88 @@ def save_df(ds_id: str, df: pd.DataFrame, action: str, detail: str = "") -> dict
         cur = d / "current.parquet"
         if not cur.exists():
             _migrate_legacy(d)
-        if cur.exists():
-            shutil.copy2(cur, d / "prev.parquet")  # 撤销快照：只保留最近一步
-        _write_parquet(df, cur)
         meta = _read_meta(d)
+        v = _ensure_versions(d, meta)
+        _prune_future_versions(d, v)  # 回溯后的新操作：丢弃未走分支
+        _snapshot_versions(d, v)  # 操作前的状态存为 v{v}，供任意步回溯
+        _write_parquet(df, cur)
         meta["rows"] = int(len(df))
         meta["cols"] = int(df.shape[1])
         meta["columns"] = _columns_info(df)
         meta["updated_at"] = _now()
-        meta["history"].append({"time": _now(), "action": action, "detail": detail})
+        meta["version"] = v + 1
+        meta["history"].append({"time": _now(), "action": action, "detail": detail, "v": v + 1})
+        meta["history"] = meta["history"][-MAX_HISTORY:]
+        _evict_old_versions(d)
+        _write_meta(d, meta)
+        return meta
+
+
+def restore_version(ds_id: str, v: int, action: str = "回溯", detail: str = "") -> dict:
+    """回到第 v 版（v=0 即上传时原始状态）。当前状态会先补快照，因此回错也能再跳回来。"""
+    with _lock:
+        d = _ds_dir(ds_id)
+        cur = d / "current.parquet"
+        if not cur.exists():
+            _migrate_legacy(d)
+        meta = _read_meta(d)
+        cur_v = _ensure_versions(d, meta)
+        v = int(v)
+        if v == cur_v:
+            return meta  # 已在该版本：幂等成功
+        tgt = _snap_versions(d).get(v)
+        if tgt is None:
+            raise DatasetNotFound(f"{ds_id}:no-snapshot:v{v}")
+        if cur_v not in _snap_versions(d):
+            _snapshot_versions(d, cur_v)  # 保留当前分支，允许再跳回
+        tmp = d / "current.restore.tmp"
+        shutil.copy2(tgt, tmp)
+        os.replace(tmp, cur)  # 快照是独立 inode，替换 current 不影响它
+        meta["version"] = v
+        df = pd.read_parquet(cur)
+        meta["rows"] = int(len(df))
+        meta["cols"] = int(df.shape[1])
+        meta["columns"] = _columns_info(df)
+        meta["updated_at"] = _now()
+        src_action = next((h.get("action") for h in reversed(meta["history"]) if h.get("v") == v), None)
+        where = src_action or ("上传时原始数据" if v == 0 else f"v{v}")
+        meta["history"].append(
+            {"time": _now(), "action": action, "detail": detail or f"回到「{where}」之后的状态（v{v}）", "to_v": v}
+        )
         meta["history"] = meta["history"][-MAX_HISTORY:]
         _write_meta(d, meta)
         return meta
 
 
-def undo_dataset(ds_id: str) -> dict:
-    """撤销最近一次修改（清洗/变换/回滚），恢复到上一步的数据。"""
+def available_versions(ds_id: str) -> dict:
+    """现有快照版本号集合 + 当前版本，供前端判断哪些历史条目可回跳。"""
     with _lock:
         d = _ds_dir(ds_id)
-        prev = d / "prev.parquet"
-        if prev.exists():
-            df_prev = pd.read_parquet(prev)
-            prev.unlink()  # 快照用完即删：只保留一级撤销
-        else:
-            legacy = d / "prev.pkl"  # 迁移期兼容：旧版 pickle 快照
-            if not legacy.exists():
-                raise DatasetNotFound(f"{ds_id}:no-undo")
-            df_prev = pd.read_pickle(legacy)  # 必须转换格式，绝不能把 pickle 字节直接拷成 parquet
-            legacy.unlink()
-        _write_parquet(df_prev, d / "current.parquet")
-        (d / "current.pkl").unlink(missing_ok=True)  # 迁移期旧版残留清理
-        df = df_prev
         meta = _read_meta(d)
-        undone = meta["history"].pop() if len(meta["history"]) > 1 else None
-        meta["rows"] = int(len(df))
-        meta["cols"] = int(df.shape[1])
-        meta["columns"] = _columns_info(df)
-        meta["updated_at"] = _now()
-        meta["history"].append(
-            {
-                "time": _now(),
-                "action": "撤销",
-                "detail": f"撤销了「{(undone or {}).get('action', '上一步')}」",
-            }
+        cur_v = _ensure_versions(d, meta)
+        return {"current": cur_v, "snapshots": sorted(_snap_versions(d))}
+
+
+def undo_dataset(ds_id: str) -> dict:
+    """撤销：回到上一版本（多级——每步操作前都有快照）。"""
+    with _lock:
+        d = _ds_dir(ds_id)
+        meta = _read_meta(d)
+        cur_v = _ensure_versions(d, meta)
+        if cur_v <= 0:
+            raise DatasetNotFound(f"{ds_id}:no-undo")
+        if (cur_v - 1) not in _snap_versions(d):
+            raise DatasetNotFound(f"{ds_id}:no-undo:v{cur_v - 1}")
+        return restore_version(
+            ds_id, cur_v - 1, action="撤销", detail=f"撤销了「{_last_action(meta, cur_v)}」，回到上一版本（v{cur_v - 1}）"
         )
-        _write_meta(d, meta)
-        return meta
+
+
+def _last_action(meta: dict, v: int) -> str:
+    for h in reversed(meta.get("history", [])):
+        if h.get("v") == v:
+            return h.get("action", "上一步")
+    return "上一步"
 
 
 def rename_dataset(ds_id: str, name: str) -> dict:
@@ -412,19 +533,26 @@ def delete_dataset(ds_id: str) -> None:
 
 
 def reset_dataset(ds_id: str) -> dict:
-    """回滚：用原始上传文件重建当前工作副本。"""
+    """回滚：取 v0 快照（或重新解析原始文件）落成一个新版本——作为操作可被撤销，
+    原有的 v0 快照与中间版本不受影响。"""
     with _lock:
         d = _ds_dir(ds_id)
-        originals = [p for p in d.glob("original.*")]
-        if not originals:
-            raise DatasetNotFound(ds_id)
-        p = originals[0]
-        df = parse_upload(p.name, p.read_bytes())
+        meta = _read_meta(d)
+        _ensure_versions(d, meta)
+        v0 = d / "versions" / "v0.parquet"
+        if v0.exists():
+            df = pd.read_parquet(v0)
+        else:
+            originals = [p for p in d.glob("original.*")]
+            if not originals:
+                raise DatasetNotFound(ds_id)
+            p = originals[0]
+            df = parse_upload(p.name, p.read_bytes())
         return save_df(ds_id, df, "回滚", "恢复到上传时的原始数据")
 
 
 def import_sheet(ds_id: str, sheet_name: str) -> str:
-    """从原始 xlsx 的其他工作表导入为新数据集。"""
+    """从原始 xlsx 的其他工作表导入为新数据集（归入源数据集所在项目）。"""
     with _lock:
         d = _ds_dir(ds_id)
         originals = [p for p in d.glob("original.xlsx")]
@@ -439,7 +567,9 @@ def import_sheet(ds_id: str, sheet_name: str) -> str:
             raise ValueError(f"工作表 [{sheet_name}] 没有数据")
         meta = _read_meta(d)
         return create_dataset(
-            f"{meta['name']}-{sheet_name}", df, f"{meta.get('original_filename', 'data.xlsx')}#{sheet_name}", p.read_bytes()
+            f"{meta['name']}-{sheet_name}", df, f"{meta.get('original_filename', 'data.xlsx')}#{sheet_name}", p.read_bytes(),
+            action="导入工作表", detail=f"从「{meta['name']}」的工作表 [{sheet_name}] 导入",
+            project=meta.get("project", ""), parent=meta["id"],
         )
 
 
@@ -449,3 +579,101 @@ def find_original_file(ds_id: str) -> Path:
     if not originals:
         raise DatasetNotFound(ds_id)
     return originals[0]
+
+
+# ---------------- 项目（数据集分组） ----------------
+
+def _read_projects() -> list:
+    if not PROJECTS_FILE.exists():
+        return []
+    try:
+        data = json.loads(PROJECTS_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, list) else []
+    except (json.JSONDecodeError, OSError):
+        logger.warning("projects.json 损坏，按空项目表处理")
+        return []
+
+
+def _write_projects(projects: list) -> None:
+    tmp = PROJECTS_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(projects, ensure_ascii=False, indent=1), encoding="utf-8")
+    os.replace(tmp, PROJECTS_FILE)
+
+
+def list_projects() -> list:
+    """项目列表（含数据集计数），按创建时间正序。"""
+    with _lock:
+        projects = [dict(p) for p in _read_projects()]
+    counts = {}
+    for m in list_datasets():
+        pid = m.get("project") or ""
+        if pid:
+            counts[pid] = counts.get(pid, 0) + 1
+    for p in projects:
+        p["count"] = counts.get(p["id"], 0)
+    return projects
+
+
+def create_project(name: str) -> dict:
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("项目名不能为空")
+    with _lock:
+        projects = _read_projects()
+        if any(p["name"] == name for p in projects):
+            raise ValueError(f"已存在同名项目「{name}」")
+        prj = {"id": f"prj-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6]}",
+               "name": name, "created_at": _now()}
+        projects.append(prj)
+        _write_projects(projects)
+    logger.info("项目已创建 id=%s name=%s", prj["id"], prj["name"])
+    return prj
+
+
+def rename_project(prj_id: str, name: str) -> dict:
+    name = (name or "").strip()
+    with _lock:
+        projects = _read_projects()
+        prj = next((p for p in projects if p["id"] == prj_id), None)
+        if prj is None:
+            raise DatasetNotFound(f"{prj_id}:project-not-found")
+        if not name:
+            raise ValueError("项目名不能为空")
+        if any(p["name"] == name and p["id"] != prj_id for p in projects):
+            raise ValueError(f"已存在同名项目「{name}」")
+        prj["name"] = name
+        _write_projects(projects)
+        return prj
+
+
+def delete_project(prj_id: str) -> None:
+    """删除项目：成员数据集移回未分组（数据本身不动）。"""
+    with _lock:
+        projects = _read_projects()
+        if not any(p["id"] == prj_id for p in projects):
+            raise DatasetNotFound(f"{prj_id}:project-not-found")
+        _write_projects([p for p in projects if p["id"] != prj_id])
+        for d in DATASETS_DIR.iterdir():
+            if not (d.is_dir() and (d / "meta.json").exists()):
+                continue
+            try:
+                meta = _read_meta(d)
+                if meta.get("project") == prj_id:
+                    meta["project"] = ""
+                    _write_meta(d, meta)
+            except (json.JSONDecodeError, OSError):
+                continue
+    logger.info("项目已删除 id=%s（成员移回未分组）", prj_id)
+
+
+def move_dataset(ds_id: str, project_id: str) -> dict:
+    """把数据集移入/移出项目（project_id 空串 = 未分组）。"""
+    project_id = (project_id or "").strip()
+    with _lock:
+        if project_id and not any(p["id"] == project_id for p in _read_projects()):
+            raise DatasetNotFound(f"{project_id}:project-not-found")
+        d = _ds_dir(ds_id)
+        meta = _read_meta(d)
+        meta["project"] = project_id
+        _write_meta(d, meta)
+        return meta

@@ -2,7 +2,6 @@
 import json
 import logging
 import os
-import time
 import uuid
 from pathlib import Path
 
@@ -16,22 +15,16 @@ from . import (
     agent,
     ai,
     analysis,
-    biz,
     cleaning,
-    datafeed,
     deepprofile,
     exporter,
-    finance,
     sqlquery,
-    stats_tests,
     storage,
     transform,
 )
 from . import compare as compare_mod
-from . import forecast as forecast_mod
 from . import insights as insights_mod
 from . import profile as prof
-from . import report as report_mod
 from . import sample as sample_mod
 from . import suggest as suggest_mod
 from .paths import DATA_DIR
@@ -64,7 +57,7 @@ def _meta_or_404(ds_id: str) -> dict:
 
 
 @router.post("/upload")
-async def upload(file: UploadFile = File(...), name: str = Form(None), sheet: str = Form(None)):
+async def upload(file: UploadFile = File(...), name: str = Form(None), sheet: str = Form(None), project: str = Form("")):
     # 先落盘临时文件（8MB 分块），大 CSV 再分块流式读回，内存不驻留整文件
     tmp = DATA_DIR / f"upload-{uuid.uuid4().hex}.part"
     size = 0
@@ -86,7 +79,7 @@ async def upload(file: UploadFile = File(...), name: str = Form(None), sheet: st
             # 同步重活（xlsx 解析可达数十秒）放线程池，避免阻塞事件循环殃及 SSE 等其他请求
             ext = Path(filename).suffix.lower()
             if ext in (".csv", ".txt") and size > storage.STREAM_THRESHOLD_BYTES:
-                return storage.create_dataset_stream(name, tmp, filename)
+                return storage.create_dataset_stream(name, tmp, filename, project=project)
             raw = tmp.read_bytes()  # 读一次复用：解析与 original 存档共用
             try:
                 df = storage.parse_upload(filename, raw, sheet_name=sheet)
@@ -95,7 +88,7 @@ async def upload(file: UploadFile = File(...), name: str = Form(None), sheet: st
             except Exception as e:  # 解析器抛出的其他异常（结构错误等）
                 logger.warning("文件解析失败 %s：%s", filename, e)
                 raise HTTPException(400, f"文件解析失败：{e}")
-            return storage.create_dataset(name, df, filename, raw)
+            return storage.create_dataset(name, df, filename, raw, project=project)
 
         ds_id = await run_in_threadpool(_build)
     finally:
@@ -107,6 +100,7 @@ async def upload(file: UploadFile = File(...), name: str = Form(None), sheet: st
 class PasteBody(BaseModel):
     text: str
     name: str = ""
+    project: str = ""
 
 
 @router.post("/upload-paste")
@@ -123,16 +117,68 @@ def upload_paste(body: PasteBody):
         df = storage.parse_upload("paste.csv", raw)
     except ValueError as e:
         raise HTTPException(400, str(e))
-    ds_id = storage.create_dataset(body.name or "粘贴数据", df, "粘贴数据.csv", raw)
+    ds_id = storage.create_dataset(body.name or "粘贴数据", df, "粘贴数据.csv", raw, project=body.project)
     return {"id": ds_id, "meta": storage.get_meta(ds_id)}
 
 
 @router.post("/sample")
-def create_sample():
+def create_sample(project: str = Query("")):
     df = sample_mod.make_sample()
     raw = df.to_csv(index=False).encode("utf-8-sig")
-    ds_id = storage.create_dataset("示例-销售数据（含缺失/重复）", df, "示例销售数据.csv", raw)
+    ds_id = storage.create_dataset("示例-销售数据（含缺失/重复）", df, "示例销售数据.csv", raw, project=project)
     return {"id": ds_id, "meta": storage.get_meta(ds_id)}
+
+
+# ---------- 项目（数据集分组） ----------
+
+
+class ProjectBody(BaseModel):
+    name: str
+
+
+@router.get("/projects")
+def projects():
+    return storage.list_projects()
+
+
+@router.post("/projects")
+def create_project(body: ProjectBody):
+    try:
+        return storage.create_project(body.name)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.patch("/projects/{prj_id}")
+def rename_project(prj_id: str, body: ProjectBody):
+    try:
+        return storage.rename_project(prj_id, body.name)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except DatasetNotFound:
+        raise HTTPException(404, "项目不存在")
+
+
+@router.delete("/projects/{prj_id}")
+def delete_project(prj_id: str):
+    try:
+        storage.delete_project(prj_id)
+    except DatasetNotFound:
+        raise HTTPException(404, "项目不存在")
+    return {"ok": True}
+
+
+class MoveBody(BaseModel):
+    project: str = ""
+
+
+@router.post("/datasets/{ds_id}/move")
+def move_dataset(ds_id: str, body: MoveBody):
+    _meta_or_404(ds_id)
+    try:
+        return storage.move_dataset(ds_id, body.project)
+    except DatasetNotFound:
+        raise HTTPException(404, "目标项目不存在")
 
 
 @router.get("/datasets")
@@ -174,7 +220,26 @@ def undo(ds_id: str):
     try:
         return storage.undo_dataset(ds_id)
     except DatasetNotFound:
-        raise HTTPException(400, "没有可撤销的操作（仅支持撤销最近一次清洗/变换/回滚）")
+        raise HTTPException(400, "没有可撤销的操作")
+
+
+@router.get("/datasets/{ds_id}/versions")
+def versions(ds_id: str):
+    _meta_or_404(ds_id)
+    return storage.available_versions(ds_id)
+
+
+class RestoreBody(BaseModel):
+    version: int
+
+
+@router.post("/datasets/{ds_id}/restore")
+def restore(ds_id: str, body: RestoreBody):
+    _meta_or_404(ds_id)
+    try:
+        return storage.restore_version(ds_id, body.version)
+    except DatasetNotFound:
+        raise HTTPException(400, f"版本 v{body.version} 的快照不存在（可能已被清理）")
 
 
 class ImportSheetBody(BaseModel):
@@ -197,9 +262,39 @@ def import_sheet(ds_id: str, body: ImportSheetBody):
 
 
 @router.get("/datasets/{ds_id}/rows")
-def rows(ds_id: str, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=500)):
+def rows(ds_id: str, page: int = Query(1, ge=1), page_size: int = Query(50, ge=1, le=500),
+         sort: str = Query(""), order: str = Query("asc"), filters: str = Query("")):
+    """分页预览，支持列排序（sort/order）与按值筛选（filters = JSON {列: [值…]}）。
+
+    "__NULL__" 哨兵值表示缺失；先过滤后排序再分页，total 为过滤后行数，另附 unfiltered_total。
+    """
     df = _load(ds_id)
-    return rows_payload(df, page, page_size)
+    unfiltered_total = len(df)
+    if filters:
+        try:
+            flt = json.loads(filters)
+        except json.JSONDecodeError:
+            raise HTTPException(400, "filters 不是合法 JSON")
+        if not isinstance(flt, dict):
+            raise HTTPException(400, "filters 需为 {列: [值…]} 结构")
+        for col, vals in flt.items():
+            if col not in df.columns:
+                raise HTTPException(400, f"筛选列不存在: {col}")
+            if not isinstance(vals, list) or not vals:
+                continue
+            has_null = "__NULL__" in vals
+            vs = [v for v in vals if v != "__NULL__"]
+            mask = df[col].isin(vs)
+            if has_null:
+                mask = mask | df[col].isna()
+            df = df[mask]
+    if sort:
+        if sort not in df.columns:
+            raise HTTPException(400, f"排序列不存在: {sort}")
+        df = df.sort_values(sort, ascending=order != "desc", na_position="last")
+    payload = rows_payload(df, page, page_size)
+    payload["unfiltered_total"] = unfiltered_total
+    return payload
 
 
 @router.get("/datasets/{ds_id}/profile")
@@ -275,21 +370,13 @@ def analyze(ds_id: str, body: AnalyzeBody):
         raise HTTPException(400, str(e))
 
 
-# ---------- 一键洞察 / 报告 ----------
+# ---------- 一键体检 ----------
 
 
 @router.get("/datasets/{ds_id}/insights")
 def get_insights(ds_id: str):
     df = _load(ds_id)
     return insights_mod.run_insights(df, storage.get_meta(ds_id))
-
-
-@router.post("/datasets/{ds_id}/report")
-def make_report(ds_id: str):
-    _meta_or_404(ds_id)
-    df = _load(ds_id)
-    path = report_mod.save_report(storage.get_meta(ds_id), df)
-    return FileResponse(path, filename=path.name, media_type="text/html")
 
 
 # ---------- SQL 控制台（DuckDB） ----------
@@ -326,10 +413,13 @@ def run_sql(body: SqlBody):
         first_line = body.query.strip().splitlines()[0][:60]
         # 直接带初始 history 建集：此前 create_dataset+save_df 会把同一 parquet 写两遍
         # 并多出一份完全相同的撤销快照
+        src_meta = next((m for m in metas if m["id"] == current), None)  # 派生表归入源数据集所在项目
         ds_id = storage.create_dataset(
             body.save_as, result["df"], "SQL查询结果.csv",
             result["df"].to_csv(index=False).encode("utf-8-sig"),
             action="SQL建集", detail=f"{first_line}…（{len(result['df'])} 行）",
+            project=src_meta.get("project", "") if src_meta else "",
+            parent=current,
         )
         payload["new_dataset"] = {"id": ds_id, "meta": storage.get_meta(ds_id)}
     return payload
@@ -374,74 +464,15 @@ def interactions(ds_id: str, x: str = Query(...), y: str = Query(...)):
         raise HTTPException(400, str(e))
 
 
-# ---------- 统计检验 ----------
+# ---------- 交叉热力 / 采样 / 图表推荐 ----------
 
 
-class TestBody(BaseModel):
-    test: str
+class ParamsBody(BaseModel):
     params: dict = {}
-
-
-@router.post("/datasets/{ds_id}/test")
-def run_test(ds_id: str, body: TestBody):
-    df = _load(ds_id)
-    try:
-        return stats_tests.run_test(df, body.test, body.params)
-    except stats_tests.TestError as e:
-        raise HTTPException(400, str(e))
-
-
-# ---------- 预测 ----------
-
-
-class ForecastBody(BaseModel):
-    params: dict = {}
-
-
-@router.post("/datasets/{ds_id}/forecast")
-def forecast(ds_id: str, body: ForecastBody):
-    df = _load(ds_id)
-    try:
-        return forecast_mod.forecast(df, body.params)
-    except analysis.AnalysisError as e:
-        raise HTTPException(400, str(e))
-
-
-# ---------- 业务模板（漏斗 / 同期群留存 / 聚类） ----------
-
-
-@router.post("/datasets/{ds_id}/funnel")
-def funnel(ds_id: str, body: ForecastBody):
-    df = _load(ds_id)
-    try:
-        return biz.funnel(df, body.params)
-    except analysis.AnalysisError as e:
-        raise HTTPException(400, str(e))
-
-
-@router.post("/datasets/{ds_id}/cohort")
-def cohort(ds_id: str, body: ForecastBody):
-    df = _load(ds_id)
-    try:
-        return biz.cohort(df, body.params)
-    except analysis.AnalysisError as e:
-        raise HTTPException(400, str(e))
-
-
-@router.post("/datasets/{ds_id}/cluster")
-def cluster(ds_id: str, body: ForecastBody):
-    df = _load(ds_id)
-    try:
-        return biz.cluster(df, body.params)
-    except analysis.AnalysisError as e:
-        raise HTTPException(400, str(e))
-
-
-# ---------- 交叉热力 / 对比 / 采样 / 图表推荐 ----------
 
 
 @router.post("/datasets/{ds_id}/cross-heat")
-def cross_heat(ds_id: str, body: ForecastBody):
+def cross_heat(ds_id: str, body: ParamsBody):
     df = _load(ds_id)
     try:
         return suggest_mod.cross_heat(df, body.params)
@@ -453,24 +484,6 @@ def cross_heat(ds_id: str, body: ForecastBody):
 def chart_suggest(ds_id: str):
     df = _load(ds_id)
     return suggest_mod.suggest(df)
-
-
-class CompareBody(BaseModel):
-    other_id: str
-    key: str = ""
-
-
-@router.post("/datasets/{ds_id}/compare")
-def compare(ds_id: str, body: CompareBody):
-    _meta_or_404(body.other_id)
-    try:
-        return compare_mod.compare(
-            _load(ds_id), _load(body.other_id),
-            storage.get_meta(ds_id)["name"], storage.get_meta(body.other_id)["name"],
-            body.key,
-        )
-    except analysis.AnalysisError as e:
-        raise HTTPException(400, str(e))
 
 
 class SampleBody(BaseModel):
@@ -487,8 +500,13 @@ def sample_create(ds_id: str, body: SampleBody):
         out = compare_mod.sample_create(_load(ds_id), body.method, body.n, body.by)
     except analysis.AnalysisError as e:
         raise HTTPException(400, str(e))
-    name = body.name or f"{storage.get_meta(ds_id)['name']}-采样"
-    ds_id2 = storage.create_dataset(name, out, "采样数据.csv", out.to_csv(index=False).encode("utf-8-sig"))
+    src_meta = storage.get_meta(ds_id)
+    name = body.name or f"{src_meta['name']}-采样"
+    ds_id2 = storage.create_dataset(
+        name, out, "采样数据.csv", out.to_csv(index=False).encode("utf-8-sig"),
+        action="采样", detail=f"从「{src_meta['name']}」{dict(random='随机', stratified='分层', top='前N行').get(body.method, body.method)}采样 {len(out)} 行",
+        project=src_meta.get("project", ""), parent=ds_id,  # 派生表留在源数据集的项目里
+    )
     return {"id": ds_id2, "meta": storage.get_meta(ds_id2)}
 
 
@@ -631,183 +649,12 @@ def ai_chart(body: AiChartBody):
             result = deepprofile.interactions(df, params.get("x", ""), params.get("y", ""))
         elif kind == "cross_heat":
             result = suggest_mod.cross_heat(df, params)
-        elif kind == "forecast":
-            result = forecast_mod.forecast(df, params)
         else:
             result = analysis.run(df, kind, params)
     except analysis.AnalysisError as e:
         raise HTTPException(400, f"AI 配置执行失败（{spec.get('title', kind)}）：{e}")
     result["ai_spec"] = {"title": str(spec.get("title", "AI 图表"))[:40], "prompt": body.prompt[:120]}
     return result
-
-
-# ---------- 金融分析 ----------
-
-
-@router.get("/datasets/{ds_id}/finance/detect")
-def finance_detect(ds_id: str):
-    df = _load(ds_id)
-    try:
-        return finance.detect_ohlcv(df)
-    except finance.FinanceError as e:
-        raise HTTPException(400, str(e))
-
-
-class FinanceMetricsBody(BaseModel):
-    close: str = ""
-    rf: float = 0.02
-    freq: str = "D"
-
-
-@router.post("/datasets/{ds_id}/finance/metrics")
-def finance_metrics(ds_id: str, body: FinanceMetricsBody):
-    df = _load(ds_id)
-    try:
-        return finance.metrics_report(df, body.model_dump())
-    except finance.FinanceError as e:
-        raise HTTPException(400, str(e))
-
-
-@router.post("/datasets/{ds_id}/finance/kline")
-def finance_kline(ds_id: str, body: dict | None = None):
-    df = _load(ds_id)
-    try:
-        return finance.kline_payload(df, body or {})
-    except finance.FinanceError as e:
-        raise HTTPException(400, str(e))
-
-
-class TechBody(BaseModel):
-    indicator: str
-    close: str = ""
-    n: int = 0
-
-
-@router.post("/datasets/{ds_id}/finance/tech-indicator")
-def finance_tech(ds_id: str, body: TechBody):
-    _meta_or_404(ds_id)
-    df = _load(ds_id)
-    try:
-        params = {"indicator": body.indicator}
-        if body.close:
-            params["close"] = body.close
-        if body.n:
-            params["n"] = body.n
-        out, msg = finance.apply_tech_indicator(df, params)
-    except finance.FinanceError as e:
-        raise HTTPException(400, str(e))
-    meta = storage.save_df(ds_id, out, "技术指标", msg)
-    return {"message": msg, "meta": meta}
-
-
-class BenchmarkBody(BaseModel):
-    other_id: str
-    close: str = ""
-    bclose: str = ""
-    rf: float = 0.02
-
-
-@router.post("/datasets/{ds_id}/finance/benchmark")
-def finance_benchmark(ds_id: str, body: BenchmarkBody):
-    _meta_or_404(body.other_id)
-    try:
-        return finance.benchmark_compare(_load(ds_id), _load(body.other_id), body.model_dump())
-    except finance.FinanceError as e:
-        raise HTTPException(400, str(e))
-
-
-class PortfolioBody(BaseModel):
-    assets: list  # [{id, close, date}]
-    weights: list = []
-    rf: float = 0.02
-
-
-@router.post("/finance/portfolio")
-def finance_portfolio(body: PortfolioBody):
-    if len(body.assets) < 2:
-        raise HTTPException(400, "请至少选择 2 个资产")
-    dfs = []
-    for a in body.assets:
-        _meta_or_404(a["id"])  # 数据集不存在统一 404（此前映射 400 且暴露内部异常格式）
-        meta = storage.get_meta(a["id"])
-        dfs.append({
-            "name": meta["name"][:12],
-            "df": storage.load_df(a["id"]),
-            "close": a.get("close", ""),
-            "date": a.get("date", ""),
-        })
-    try:
-        return finance.portfolio_analysis(dfs, {"weights": body.weights, "rf": body.rf})
-    except finance.FinanceError as e:
-        raise HTTPException(400, str(e))
-
-
-class FeedBody(BaseModel):
-    source: str = "stock"  # stock / index
-    symbol: str
-    start: str
-    end: str
-    period: str = "D"
-    adjust: str = "qfq"
-
-
-@router.post("/datafeed/fetch")
-def datafeed_fetch(body: FeedBody):
-    try:
-        t0 = time.monotonic()
-        if body.source == "index":
-            df = datafeed.fetch_index(body.symbol, body.start, body.end, body.period)
-            name = f"指数{body.symbol}"
-        else:
-            df = datafeed.fetch_stock(body.symbol, body.start, body.end, body.period, body.adjust)
-            name = f"股票{body.symbol}"
-        logger.info("行情拉取 %s %s~%s %d 行 耗时=%.1fs", body.symbol, body.start, body.end, len(df), time.monotonic() - t0)
-    except datafeed.FeedError as e:
-        raise HTTPException(400, str(e))
-    except Exception as e:  # 打包环境缺模块等未知错误 → 友好暴露而非 500
-        raise HTTPException(400, f"行情获取异常：{type(e).__name__}: {str(e)[:150]}")
-    ds_id = storage.create_dataset(name, df, f"{name}.csv", df.to_csv(index=False).encode("utf-8-sig"))
-    return {"id": ds_id, "meta": storage.get_meta(ds_id)}
-
-
-@router.post("/finance/sample-stock")
-def finance_sample_stock():
-    df = finance.make_stock_sample()
-    ds_id = storage.create_dataset("示例股票-日线(250日)", df, "示例股票.csv",
-                                   df.to_csv(index=False).encode("utf-8-sig"))
-    return {"id": ds_id, "meta": storage.get_meta(ds_id)}
-
-
-@router.get("/datafeed/indexes")
-def datafeed_indexes():
-    return datafeed.INDEX_SOURCES
-
-
-@router.get("/datafeed/search")
-def datafeed_search(q: str = Query("")):
-    try:
-        return datafeed.search_hot(q)
-    except datafeed.FeedError as e:
-        raise HTTPException(400, str(e))
-
-
-# 金融检验走通用 test 端点的扩展
-class FinanceTestBody(BaseModel):
-    test: str  # adf / ljung_box
-    params: dict = {}
-
-
-@router.post("/datasets/{ds_id}/finance/test")
-def finance_test(ds_id: str, body: FinanceTestBody):
-    df = _load(ds_id)
-    try:
-        if body.test == "adf":
-            return finance.adf_test(df, body.params)
-        if body.test == "ljung_box":
-            return finance.ljung_box_test(df, body.params)
-        raise HTTPException(400, f"未知金融检验: {body.test}")
-    except finance.FinanceError as e:
-        raise HTTPException(400, str(e))
 
 
 

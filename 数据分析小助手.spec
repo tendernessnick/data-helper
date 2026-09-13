@@ -1,20 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_data_files
-from PyInstaller.utils.hooks import collect_submodules
-
-datas = [('frontend', 'frontend')]
-hiddenimports = []
-datas += collect_data_files('akshare')
-datas += collect_data_files('py_mini_racer')
-hiddenimports += collect_submodules('akshare')
 
 
 a = Analysis(
     ['run_app.py'],
     pathex=[],
     binaries=[],
-    datas=datas,
-    hiddenimports=hiddenimports,
+    datas=[('frontend', 'frontend')],
+    hiddenimports=[],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

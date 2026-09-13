@@ -1,0 +1,368 @@
+{
+ "overview": {
+  "rows": 1067371,
+  "cols": 8,
+  "duplicates": 34335,
+  "missing_cells": 247389,
+  "missing_pct": 2.9,
+  "mem_mb": 136.64
+ },
+ "findings": [
+  {
+   "level": "error",
+   "category": "structure",
+   "column": null,
+   "msg": "存在 34335 行完全重复的数据",
+   "detail": "重复行会让统计结果被重复计入",
+   "samples": [],
+   "fix": {
+    "op": "drop_duplicates",
+    "params": {},
+    "label": "一键去重"
+   }
+  },
+  {
+   "level": "warn",
+   "category": "text",
+   "column": "StockCode",
+   "msg": "列 [StockCode] 有 1 个值带首尾空格（0.0%）",
+   "detail": "空格不一致会导致分组、匹配时同值不同串",
+   "samples": [],
+   "fix": {
+    "op": "trim_whitespace",
+    "params": {
+     "columns": [
+      "StockCode"
+     ]
+    },
+    "label": "去除首尾空格"
+   }
+  },
+  {
+   "level": "warn",
+   "category": "type",
+   "column": "StockCode",
+   "msg": "列 [StockCode] 是混合类型：约 87.35% 可转数值，其余是文本",
+   "detail": "同列混放数字与文字，多为单位、备注混入或录入错误",
+   "samples": [
+    "85048",
+    "79323P",
+    "79323W"
+   ],
+   "fix": {
+    "op": "parse_number",
+    "params": {
+     "column": "StockCode"
+    },
+    "label": "提取数值（其余置空）"
+   }
+  },
+  {
+   "level": "warn",
+   "category": "text",
+   "column": "Description",
+   "msg": "列 [Description] 有 213035 个值带首尾空格（20.04%）",
+   "detail": "空格不一致会导致分组、匹配时同值不同串",
+   "samples": [],
+   "fix": {
+    "op": "trim_whitespace",
+    "params": {
+     "columns": [
+      "Description"
+     ]
+    },
+    "label": "去除首尾空格"
+   }
+  },
+  {
+   "level": "warn",
+   "category": "numeric",
+   "column": "Quantity",
+   "msg": "列 [Quantity] 有 116489 个离群值（占 10.91%，IQR 口径）",
+   "detail": "先确认是真实极端值还是录入错误；盖帽不删行",
+   "samples": [],
+   "fix": {
+    "op": "cap_outliers",
+    "params": {
+     "columns": [
+      "Quantity"
+     ],
+     "method": "iqr"
+    },
+    "label": "盖帽到上下界"
+   }
+  },
+  {
+   "level": "warn",
+   "category": "numeric",
+   "column": "Quantity",
+   "msg": "列 [Quantity] 几乎全为正但有 22950 个负值",
+   "detail": "若该列不应为负（数量、年龄等），多为录入错误或哨兵值（-1/-999）",
+   "samples": [
+    "-12",
+    "-6",
+    "-4"
+   ],
+   "fix": null
+  },
+  {
+   "level": "warn",
+   "category": "numeric",
+   "column": "Price",
+   "msg": "列 [Price] 有 68105 个离群值（占 6.38%，IQR 口径）",
+   "detail": "先确认是真实极端值还是录入错误；盖帽不删行",
+   "samples": [],
+   "fix": {
+    "op": "cap_outliers",
+    "params": {
+     "columns": [
+      "Price"
+     ],
+     "method": "iqr"
+    },
+    "label": "盖帽到上下界"
+   }
+  },
+  {
+   "level": "warn",
+   "category": "numeric",
+   "column": "Price",
+   "msg": "列 [Price] 几乎全为正但有 5 个负值",
+   "detail": "若该列不应为负（数量、年龄等），多为录入错误或哨兵值（-1/-999）",
+   "samples": [
+    "-53594.36",
+    "-44031.79",
+    "-38925.87"
+   ],
+   "fix": null
+  },
+  {
+   "level": "info",
+   "category": "missing",
+   "column": null,
+   "msg": "缺失单元格 247389 个（2.9%），整体健康",
+   "detail": null,
+   "samples": [],
+   "fix": null
+  },
+  {
+   "level": "info",
+   "category": "type",
+   "column": "InvoiceNo",
+   "msg": "列 [InvoiceNo] 内容几乎全是数字（可转数值比例约 98.17%）",
+   "detail": "文本数字无法直接计算，建议转为数值类型",
+   "samples": [],
+   "fix": {
+    "op": "cast_type",
+    "params": {
+     "column": "InvoiceNo",
+     "to": "float"
+    },
+    "label": "转为数值"
+   }
+  },
+  {
+   "level": "info",
+   "category": "text",
+   "column": "Description",
+   "msg": "列 [Description] 有 48398 个值含连续多余空格",
+   "detail": null,
+   "samples": [],
+   "fix": {
+    "op": "normalize_text",
+    "params": {
+     "columns": [
+      "Description"
+     ]
+    },
+    "label": "压缩连续空格"
+   }
+  },
+  {
+   "level": "info",
+   "category": "numeric",
+   "column": "Quantity",
+   "msg": "列 [Quantity] 分布严重右偏（偏度 4.0）",
+   "detail": "均值会被极端值拉偏，看中位数更稳",
+   "samples": [],
+   "fix": null
+  },
+  {
+   "level": "info",
+   "category": "type",
+   "column": "InvoiceDate",
+   "msg": "列 [InvoiceDate] 看起来是日期列（当前为文本）",
+   "detail": "转为日期后才能做趋势、重采样",
+   "samples": [],
+   "fix": {
+    "op": "cast_type",
+    "params": {
+     "column": "InvoiceDate",
+     "to": "datetime"
+    },
+    "label": "转为日期"
+   }
+  },
+  {
+   "level": "info",
+   "category": "numeric",
+   "column": "Price",
+   "msg": "列 [Price] 分布严重左偏（偏度 -69.16）",
+   "detail": "均值会被极端值拉偏，看中位数更稳",
+   "samples": [],
+   "fix": null
+  },
+  {
+   "level": "info",
+   "category": "category",
+   "column": "Country",
+   "msg": "列 [Country] 高度集中：「United Kingdom」占 91.94%",
+   "detail": null,
+   "samples": [],
+   "fix": null
+  }
+ ],
+ "findings_truncated": 0,
+ "numeric": [
+  {
+   "name": "Quantity",
+   "min": -80995.0,
+   "max": 80995.0,
+   "mean": 9.94,
+   "median": 3.0,
+   "std": 172.71,
+   "skew": 4.0,
+   "shape": "右偏（长尾在大值）",
+   "zeros": 0,
+   "negatives": 22950,
+   "outliers": 116489,
+   "outlier_pct": 10.91
+  },
+  {
+   "name": "Price",
+   "min": -53594.36,
+   "max": 38970.0,
+   "mean": 4.65,
+   "median": 2.1,
+   "std": 123.55,
+   "skew": -69.16,
+   "shape": "左偏（长尾在小值）",
+   "zeros": 6202,
+   "negatives": 5,
+   "outliers": 68105,
+   "outlier_pct": 6.38
+  },
+  {
+   "name": "CustomerID",
+   "min": 12346.0,
+   "max": 18287.0,
+   "mean": 15324.64,
+   "median": 15255.0,
+   "std": 1697.46,
+   "skew": 0.01,
+   "shape": "接近对称",
+   "zeros": 0,
+   "negatives": 0,
+   "outliers": 0,
+   "outlier_pct": 0.0
+  }
+ ],
+ "categorical": [
+  {
+   "name": "InvoiceNo",
+   "nunique": 53628,
+   "top_value": "537434",
+   "top_count": 1350,
+   "top_share": 0.13,
+   "rare": 13294
+  },
+  {
+   "name": "StockCode",
+   "nunique": 5305,
+   "top_value": "85123A",
+   "top_count": 5829,
+   "top_share": 0.55,
+   "rare": 433
+  },
+  {
+   "name": "Description",
+   "nunique": 5698,
+   "top_value": "WHITE HANGING HEART T-LIGHT HOLDER",
+   "top_count": 5918,
+   "top_share": 0.55,
+   "rare": 385
+  },
+  {
+   "name": "InvoiceDate",
+   "nunique": 47635,
+   "top_value": "2010-12-06 16:57:00",
+   "top_count": 1350,
+   "top_share": 0.13,
+   "rare": 8999
+  },
+  {
+   "name": "Country",
+   "nunique": 43,
+   "top_value": "United Kingdom",
+   "top_count": 981330,
+   "top_share": 91.94,
+   "rare": 0
+  }
+ ],
+ "datetime": {
+  "column": "InvoiceDate",
+  "value_column": "Quantity",
+  "min": "2009-12-01",
+  "max": "2011-12-09",
+  "span_days": 738,
+  "direction": "波动",
+  "change_pct": -46.12,
+  "big_shift": {
+   "period": "2011-12",
+   "pct": -69.4
+  }
+ },
+ "correlations": [],
+ "alerts": [
+  "🔴 存在 34335 行完全重复的数据（重复行会让统计结果被重复计入）",
+  "🟡 列 [StockCode] 有 1 个值带首尾空格（0.0%）（空格不一致会导致分组、匹配时同值不同串）",
+  "🟡 列 [StockCode] 是混合类型：约 87.35% 可转数值，其余是文本（同列混放数字与文字，多为单位、备注混入或录入错误）",
+  "🟡 列 [Description] 有 213035 个值带首尾空格（20.04%）（空格不一致会导致分组、匹配时同值不同串）",
+  "🟡 列 [Quantity] 有 116489 个离群值（占 10.91%，IQR 口径）（先确认是真实极端值还是录入错误；盖帽不删行）",
+  "🟡 列 [Quantity] 几乎全为正但有 22950 个负值（若该列不应为负（数量、年龄等），多为录入错误或哨兵值（-1/-999））",
+  "🟡 列 [Price] 有 68105 个离群值（占 6.38%，IQR 口径）（先确认是真实极端值还是录入错误；盖帽不删行）",
+  "🟡 列 [Price] 几乎全为正但有 5 个负值（若该列不应为负（数量、年龄等），多为录入错误或哨兵值（-1/-999））",
+  "🔵 缺失单元格 247389 个（2.9%），整体健康",
+  "🔵 列 [InvoiceNo] 内容几乎全是数字（可转数值比例约 98.17%）（文本数字无法直接计算，建议转为数值类型）",
+  "🔵 列 [Description] 有 48398 个值含连续多余空格",
+  "🔵 列 [Quantity] 分布严重右偏（偏度 4.0）（均值会被极端值拉偏，看中位数更稳）",
+  "🔵 列 [InvoiceDate] 看起来是日期列（当前为文本）（转为日期后才能做趋势、重采样）",
+  "🔵 列 [Price] 分布严重左偏（偏度 -69.16）（均值会被极端值拉偏，看中位数更稳）",
+  "🔵 列 [Country] 高度集中：「United Kingdom」占 91.94%",
+  "🟢 时间范围 2009-12-01 ~ 2011-12-09（738 天）：Quantity 按月整体呈波动（首末期变化 -46.12%）"
+ ],
+ "quality_score": {
+  "score": 83.4,
+  "level": "良好",
+  "color": "#007aff",
+  "deductions": [
+   {
+    "reason": "34335 行重复数据",
+    "cut": 1.6
+   },
+   {
+    "reason": "缺失单元格占 2.9%",
+    "cut": 1.4
+   },
+   {
+    "reason": "1 个严重问题（结构/格式）",
+    "cut": 3
+   },
+   {
+    "reason": "7 个警告级问题",
+    "cut": 10.5
+   }
+  ],
+  "note": "评分基于重复、缺失、结构/格式问题与异常值的加权扣分（满分 100）"
+ }
+}

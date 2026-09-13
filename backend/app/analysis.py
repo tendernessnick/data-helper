@@ -1,4 +1,4 @@
-"""统计分析：描述统计 / 分组聚合 / 透视表 / 相关性 / 直方图 / 箱线图。
+"""快速统计：描述统计 / 分组聚合 / 相关性 / 直方图 / 箱线图 / 频次 / 时间趋势 / 异常值。
 
 统一返回 {"columns": [...], "rows": [[...]], "kind": ...} 结构，
 前端据此渲染表格与图表。
@@ -85,26 +85,6 @@ def groupby(df: pd.DataFrame, params: dict) -> dict:
     return table
 
 
-def pivot(df: pd.DataFrame, params: dict) -> dict:
-    index = params.get("index")
-    columns = params.get("columns")
-    values = params.get("values")
-    aggfunc = params.get("aggfunc", "sum")
-    for c in (index, columns, values):
-        if c is not None:
-            _check(df, c)
-    if not index or not values:
-        raise AnalysisError("透视表需要行维度(index)与数值列(values)")
-    if aggfunc not in AGGS:
-        raise AnalysisError(f"未知聚合方式 {aggfunc}")
-    pt = pd.pivot_table(
-        df, index=index, columns=columns, values=values, aggfunc=aggfunc, dropna=False
-    )
-    table = _to_table(pt)
-    table["note"] = f"透视表: 行={index}" + (f" 列={columns}" if columns else "") + f" 值={values}({aggfunc})"
-    return table
-
-
 def corr(df: pd.DataFrame, params: dict) -> dict:
     cols = params.get("columns")
     method = params.get("method", "pearson")
@@ -182,8 +162,6 @@ def boxplot(df: pd.DataFrame, params: dict) -> dict:
 
 
 FREQ_MAP = {"D": "D", "W": "W", "M": "MS", "Q": "QS", "Y": "YS"}
-# 同比需要的周期数（上一个"同口径期间"距离当前多少个周期）
-YOY_PERIODS = {"D": 365, "W": 52, "M": 12, "Q": 4, "Y": None}
 FREQ_LABEL = {"D": "天", "W": "周", "M": "月", "Q": "季", "Y": "年"}
 
 
@@ -206,230 +184,6 @@ def _resample_series(df: pd.DataFrame, date_col: str, value_col: str, freq: str,
     if series.empty:
         raise AnalysisError("重采样后没有数据")
     return series
-
-
-def growth(df: pd.DataFrame, params: dict) -> dict:
-    """同比/环比/累计分析。"""
-    date_col = params.get("date_column", "")
-    value_col = params.get("value_column", "")
-    freq = params.get("freq", "M")
-    agg = params.get("agg", "sum")
-    series = _resample_series(df, date_col, value_col, freq, agg)
-    freq_label = FREQ_LABEL.get(freq, freq)
-    mom = (series.pct_change() * 100).replace([np.inf, -np.inf], np.nan).round(2)
-    yoy_periods = YOY_PERIODS.get(freq)
-    yoy = (series.pct_change(periods=yoy_periods) * 100).replace([np.inf, -np.inf], np.nan).round(2) if yoy_periods else pd.Series([None] * len(series), index=series.index)
-    cum = series.cumsum().round(4)
-    rows_out = []
-    for idx, v in series.items():
-        rows_out.append(
-            [
-                idx.strftime("%Y-%m-%d"),
-                round(float(v), 4),
-                None if pd.isna(mom.get(idx)) else float(mom.get(idx)),
-                None if pd.isna(yoy.get(idx)) else float(yoy.get(idx)),
-                round(float(cum.get(idx)), 4),
-            ]
-        )
-    return {
-        "columns": [
-            {"name": "期间", "numeric": False},
-            {"name": value_col, "numeric": True},
-            {"name": "环比%", "numeric": True},
-            {"name": "同比%", "numeric": True},
-            {"name": "累计值", "numeric": True},
-        ],
-        "rows": rows_out,
-        "note": f"{value_col} 按{freq_label}{agg}：环比/同比增长率与累计值（同比按{freq_label}对齐）"
-                + ("；日频同比按 365 个期间对齐，交易日数据（不含周末）会出现漂移，建议用周/月粒度" if freq == "D" else ""),
-        "chart": {"type": "line", "label_col": "期间"},
-    }
-
-
-def moving_avg(df: pd.DataFrame, params: dict) -> dict:
-    """移动平均（滚动均值）平滑趋势。"""
-    date_col = params.get("date_column", "")
-    value_col = params.get("value_column", "")
-    freq = params.get("freq", "M")
-    agg = params.get("agg", "sum")
-    window = int(params.get("window", 3))
-    if window < 2:
-        raise AnalysisError("窗口至少为 2")
-    series = _resample_series(df, date_col, value_col, freq, agg)
-    freq_label = FREQ_LABEL.get(freq, freq)
-    ma = series.rolling(window=window, min_periods=1).mean().round(4)
-    rows_out = []
-    for idx, v in series.items():
-        rows_out.append([idx.strftime("%Y-%m-%d"), round(float(v), 4), float(ma.get(idx))])
-    return {
-        "columns": [
-            {"name": "期间", "numeric": False},
-            {"name": value_col, "numeric": True},
-            {"name": f"{window}期移动平均", "numeric": True},
-        ],
-        "rows": rows_out,
-        "note": f"{value_col} 按{freq_label}{agg}的 {window} 期移动平均（平滑波动看趋势）",
-        "chart": {"type": "line", "label_col": "期间"},
-    }
-
-
-RFM_SEGMENTS = (
-    (True, True, True, "重要价值客户"),
-    (True, True, False, "重要保持客户"),
-    (True, False, True, "重要发展客户"),
-    (False, True, True, "重要挽留客户"),
-    (True, False, False, "一般发展客户"),
-    (False, True, False, "一般保持客户"),
-    (False, False, True, "一般挽留客户"),
-    (False, False, False, "一般客户"),
-)
-
-
-def _score_1to5(series: pd.Series, higher_is_better: bool) -> pd.Series:
-    """把数值列打为 1~5 分（五分位）。rank 保证小样本不出现重复边界。"""
-    rank = series.rank(ascending=higher_is_better, method="first")
-    try:
-        return pd.qcut(rank, 5, labels=False) + 1
-    except ValueError:
-        # 极端小样本兜底：按排名百分位映射
-        return (rank / len(rank) * 5).ceil().clip(1, 5).astype(int)
-
-
-def rfm(df: pd.DataFrame, params: dict) -> dict:
-    """RFM 客户价值分析：最近消费 R / 频次 F / 金额 M，五分位打分 + 8 层分层。"""
-    id_col = params.get("id_column", "")
-    date_col = params.get("date_column", "")
-    value_col = params.get("value_column", "")
-    for c, _label in ((id_col, "客户/主体列"), (date_col, "日期列"), (value_col, "金额列")):
-        if c:
-            _check(df, c)
-    if not (id_col and date_col and value_col):
-        raise AnalysisError("RFM 需要 客户列、日期列、金额列 三项")
-    dates = df[date_col]
-    if not pd.api.types.is_datetime64_any_dtype(dates):
-        dates = pd.to_datetime(dates, errors="coerce")
-    tmp = pd.DataFrame(
-        {
-            "客户": df[id_col].astype(str),
-            "日期": dates,
-            "金额": pd.to_numeric(df[value_col], errors="coerce"),
-        }
-    ).dropna()
-    if tmp.empty:
-        raise AnalysisError("有效数据为空（日期或金额无法解析）")
-    g = tmp.groupby("客户").agg(最近消费=("日期", "max"), 消费频次=("日期", "count"), 消费金额=("金额", "sum"))
-    g["R天数"] = (g["最近消费"].max() - g["最近消费"]).dt.days
-    g["R分"] = _score_1to5(g["R天数"], higher_is_better=False)  # 天数越小分越高
-    g["F分"] = _score_1to5(g["消费频次"], higher_is_better=True)
-    g["M分"] = _score_1to5(g["消费金额"], higher_is_better=True)
-
-    def _seg(row):
-        for r, f, m, name in RFM_SEGMENTS:
-            if (row["R分"] >= 3) == r and (row["F分"] >= 3) == f and (row["M分"] >= 3) == m:
-                return name
-        return "一般客户"
-
-    g["分层"] = g.apply(_seg, axis=1)
-    total_m = g["消费金额"].sum()
-    summary = (
-        g.groupby("分层")
-        .agg(客户数=("分层", "size"), 金额合计=("消费金额", "sum"))
-        .sort_values("金额合计", ascending=False)
-    )
-    summary["金额占比%"] = (summary["金额合计"] / total_m * 100).round(2)
-    from .serialize import cell
-
-    summary_rows = [
-        [idx, int(r["客户数"]), cell(r["金额合计"]), cell(r["金额占比%"])]
-        for idx, r in summary.iterrows()
-    ]
-    detail = g.sort_values("消费金额", ascending=False)
-    detail_rows = [
-        [
-            idx,
-            r["最近消费"].strftime("%Y-%m-%d"),
-            int(r["R天数"]),
-            int(r["消费频次"]),
-            cell(r["消费金额"]),
-            int(r["R分"]),
-            int(r["F分"]),
-            int(r["M分"]),
-            r["分层"],
-        ]
-        for idx, r in detail.iterrows()
-    ]
-    return {
-        "columns": [
-            {"name": "分层", "numeric": False},
-            {"name": "客户数", "numeric": True},
-            {"name": "金额合计", "numeric": True},
-            {"name": "金额占比%", "numeric": True},
-        ],
-        "rows": summary_rows,
-        "detail": {
-            "columns": [
-                {"name": "客户", "numeric": False},
-                {"name": "最近消费", "numeric": False},
-                {"name": "R天数", "numeric": True},
-                {"name": "消费频次", "numeric": True},
-                {"name": "消费金额", "numeric": True},
-                {"name": "R分", "numeric": True},
-                {"name": "F分", "numeric": True},
-                {"name": "M分", "numeric": True},
-                {"name": "分层", "numeric": False},
-            ],
-            "rows": detail_rows[:500],
-        },
-        "note": f"RFM 客户分层：{len(g)} 个客户，合计金额 {round(float(total_m), 2)}（明细显示前 500）",
-        "chart": {"type": "pie", "label_col": "分层"},
-    }
-
-
-def pareto(df: pd.DataFrame, params: dict) -> dict:
-    """ABC / 帕累托分析：找出贡献主要价值的少数项目。"""
-    cat_col = params.get("category_column", "")
-    value_col = params.get("value_column", "")
-    top_n = int(params.get("top_n", 30))
-    _check(df, cat_col)
-    _check(df, value_col)
-    tmp = pd.DataFrame(
-        {"类别": df[cat_col].astype(str), "值": pd.to_numeric(df[value_col], errors="coerce")}
-    ).dropna()
-    if tmp.empty:
-        raise AnalysisError("没有有效数值行")
-    g = tmp.groupby("类别")["值"].sum().sort_values(ascending=False)
-    if len(g) > top_n:
-        head, tail = g.head(top_n), g.iloc[top_n:]
-        g = pd.concat([head, pd.Series([tail.sum()], index=[f"其他({len(tail)}项)"])])
-    share = (g / g.sum() * 100).round(2)
-    cum = share.cumsum().round(2)
-
-    def _cls(prev_cum):
-        if prev_cum < 80:
-            return "A"
-        return "B" if prev_cum < 95 else "C"
-
-    rows_out = []
-    n_a = n_b = 0
-    for idx, v in g.items():
-        prev = round(float(cum[idx] - share[idx]), 2)
-        cls = _cls(prev)
-        n_a += cls == "A"
-        n_b += cls == "B"
-        rows_out.append([idx, round(float(v), 4), float(share[idx]), float(cum[idx]), cls])
-    a_share = rows_out[n_a - 1][3] if n_a else 0
-    return {
-        "columns": [
-            {"name": str(cat_col), "numeric": False},
-            {"name": str(value_col), "numeric": True},
-            {"name": "占比%", "numeric": True},
-            {"name": "累计占比%", "numeric": True},
-            {"name": "ABC分级", "numeric": False},
-        ],
-        "rows": rows_out,
-        "note": f"帕累托/ABC：A 类 {n_a} 项（累计占比越过 80% 线之前）累计贡献 {a_share}%，B 类 {n_b} 项，其余为 C 类",
-        "pareto": True,
-    }
 
 
 def outlier_bounds(s: pd.Series, method: str = "iqr", k: float = 3.0):
@@ -496,7 +250,8 @@ def value_counts(df: pd.DataFrame, params: dict) -> dict:
     column = params.get("column")
     top = int(params.get("top", 20))
     _check(df, column)
-    vc = df[column].value_counts(dropna=False).head(max(1, top))
+    # 缺失行不进值列表：前端筛选用 __NULL__ 哨兵单独表达缺失，混进来会变成假的 "nan" 取值
+    vc = df[column].value_counts(dropna=True).head(max(1, top))
     return {
         "columns": [{"name": str(column), "numeric": False}, {"name": "计数", "numeric": True}],
         "rows": [[str(k), int(v)] for k, v in vc.items()],
@@ -524,16 +279,11 @@ def trend(df: pd.DataFrame, params: dict) -> dict:
 KINDS = {
     "describe": describe,
     "groupby": groupby,
-    "pivot": pivot,
     "corr": corr,
     "histogram": histogram,
     "boxplot": boxplot,
     "value_counts": value_counts,
     "trend": trend,
-    "growth": growth,
-    "moving_avg": moving_avg,
-    "rfm": rfm,
-    "pareto": pareto,
     "outliers": outliers,
 }
 

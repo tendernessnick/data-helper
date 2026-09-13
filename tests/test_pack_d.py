@@ -61,15 +61,3 @@ def test_insights_empty_quality_ok():
     assert any("未发现明显数据质量问题" in a for a in body["alerts"])
 
 
-def test_report_html():
-    ds = setup_sales()
-    r = client.post(f"/api/datasets/{ds}/report")
-    assert r.status_code == 200
-    html = r.content.decode("utf-8")
-    # 自包含：内嵌 echarts、包含洞察与图表容器
-    assert "echarts" in html
-    assert "关键发现" in html and "数值列概览" in html
-    assert "id='hist_" in html  # 数值分布图存在
-    assert "setOption" in html
-    # 恶意字符转义安全（数据集名注入）
-    assert "<script>alert" not in html

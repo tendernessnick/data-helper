@@ -1,0 +1,297 @@
+{
+ "overview": {
+  "rows": 805549,
+  "cols": 7,
+  "duplicates": 314891,
+  "missing_cells": 0,
+  "missing_pct": 0.0,
+  "mem_mb": 76.27
+ },
+ "findings": [
+  {
+   "level": "error",
+   "category": "structure",
+   "column": null,
+   "msg": "存在 314891 行完全重复的数据",
+   "detail": "重复行会让统计结果被重复计入",
+   "samples": [],
+   "fix": {
+    "op": "drop_duplicates",
+    "params": {},
+    "label": "一键去重"
+   }
+  },
+  {
+   "level": "warn",
+   "category": "numeric",
+   "column": "Quantity",
+   "msg": "列 [Quantity] 有 51983 个离群值（占 6.45%，IQR 口径）",
+   "detail": "先确认是真实极端值还是录入错误；盖帽不删行",
+   "samples": [],
+   "fix": {
+    "op": "cap_outliers",
+    "params": {
+     "columns": [
+      "Quantity"
+     ],
+     "method": "iqr"
+    },
+    "label": "盖帽到上下界"
+   }
+  },
+  {
+   "level": "warn",
+   "category": "numeric",
+   "column": "Price",
+   "msg": "列 [Price] 有 67346 个离群值（占 8.36%，IQR 口径）",
+   "detail": "先确认是真实极端值还是录入错误；盖帽不删行",
+   "samples": [],
+   "fix": {
+    "op": "cap_outliers",
+    "params": {
+     "columns": [
+      "Price"
+     ],
+     "method": "iqr"
+    },
+    "label": "盖帽到上下界"
+   }
+  },
+  {
+   "level": "warn",
+   "category": "numeric",
+   "column": "Amount",
+   "msg": "列 [Amount] 有 66382 个离群值（占 8.24%，IQR 口径）",
+   "detail": "先确认是真实极端值还是录入错误；盖帽不删行",
+   "samples": [],
+   "fix": {
+    "op": "cap_outliers",
+    "params": {
+     "columns": [
+      "Amount"
+     ],
+     "method": "iqr"
+    },
+    "label": "盖帽到上下界"
+   }
+  },
+  {
+   "level": "info",
+   "category": "type",
+   "column": "InvoiceNo",
+   "msg": "列 [InvoiceNo] 内容几乎全是数字（可转数值比例约 100.0%）",
+   "detail": "文本数字无法直接计算，建议转为数值类型",
+   "samples": [],
+   "fix": {
+    "op": "cast_type",
+    "params": {
+     "column": "InvoiceNo",
+     "to": "float"
+    },
+    "label": "转为数值"
+   }
+  },
+  {
+   "level": "info",
+   "category": "type",
+   "column": "CustomerID",
+   "msg": "列 [CustomerID] 内容几乎全是数字（可转数值比例约 100.0%）",
+   "detail": "文本数字无法直接计算，建议转为数值类型",
+   "samples": [],
+   "fix": {
+    "op": "cast_type",
+    "params": {
+     "column": "CustomerID",
+     "to": "float"
+    },
+    "label": "转为数值"
+   }
+  },
+  {
+   "level": "info",
+   "category": "type",
+   "column": "InvoiceDate",
+   "msg": "列 [InvoiceDate] 看起来是日期列（当前为文本）",
+   "detail": "转为日期后才能做趋势、重采样",
+   "samples": [],
+   "fix": {
+    "op": "cast_type",
+    "params": {
+     "column": "InvoiceDate",
+     "to": "datetime"
+    },
+    "label": "转为日期"
+   }
+  },
+  {
+   "level": "info",
+   "category": "numeric",
+   "column": "Quantity",
+   "msg": "列 [Quantity] 分布严重右偏（偏度 406.42）",
+   "detail": "均值会被极端值拉偏，看中位数更稳",
+   "samples": [],
+   "fix": null
+  },
+  {
+   "level": "info",
+   "category": "numeric",
+   "column": "Price",
+   "msg": "列 [Price] 分布严重右偏（偏度 244.34）",
+   "detail": "均值会被极端值拉偏，看中位数更稳",
+   "samples": [],
+   "fix": null
+  },
+  {
+   "level": "info",
+   "category": "category",
+   "column": "Country",
+   "msg": "列 [Country] 高度集中：「United Kingdom」占 90.03%",
+   "detail": null,
+   "samples": [],
+   "fix": null
+  },
+  {
+   "level": "info",
+   "category": "numeric",
+   "column": "Amount",
+   "msg": "列 [Amount] 分布严重右偏（偏度 586.62）",
+   "detail": "均值会被极端值拉偏，看中位数更稳",
+   "samples": [],
+   "fix": null
+  }
+ ],
+ "findings_truncated": 0,
+ "numeric": [
+  {
+   "name": "Quantity",
+   "min": 1.0,
+   "max": 80995.0,
+   "mean": 13.29,
+   "median": 5.0,
+   "std": 143.63,
+   "skew": 406.42,
+   "shape": "右偏（长尾在大值）",
+   "zeros": 0,
+   "negatives": 0,
+   "outliers": 51983,
+   "outlier_pct": 6.45
+  },
+  {
+   "name": "Price",
+   "min": 0.0,
+   "max": 10953.5,
+   "mean": 3.21,
+   "median": 1.95,
+   "std": 29.2,
+   "skew": 244.34,
+   "shape": "右偏（长尾在大值）",
+   "zeros": 0,
+   "negatives": 0,
+   "outliers": 67346,
+   "outlier_pct": 8.36
+  },
+  {
+   "name": "Amount",
+   "min": 0.0,
+   "max": 168469.6,
+   "mean": 22.03,
+   "median": 11.85,
+   "std": 224.04,
+   "skew": 586.62,
+   "shape": "右偏（长尾在大值）",
+   "zeros": 18,
+   "negatives": 0,
+   "outliers": 66382,
+   "outlier_pct": 8.24
+  }
+ ],
+ "categorical": [
+  {
+   "name": "InvoiceNo",
+   "nunique": 36969,
+   "top_value": "576339",
+   "top_count": 542,
+   "top_share": 0.07,
+   "rare": 2974
+  },
+  {
+   "name": "CustomerID",
+   "nunique": 5878,
+   "top_value": "17841",
+   "top_count": 12890,
+   "top_share": 1.6,
+   "rare": 111
+  },
+  {
+   "name": "InvoiceDate",
+   "nunique": 34585,
+   "top_value": "2011-11-14 15:27:00",
+   "top_count": 542,
+   "top_share": 0.07,
+   "rare": 2546
+  },
+  {
+   "name": "Country",
+   "nunique": 41,
+   "top_value": "United Kingdom",
+   "top_count": 725250,
+   "top_share": 90.03,
+   "rare": 0
+  }
+ ],
+ "datetime": {
+  "column": "InvoiceDate",
+  "value_column": "Quantity",
+  "min": "2009-12-01",
+  "max": "2011-12-09",
+  "span_days": 738,
+  "direction": "波动",
+  "change_pct": -28.17,
+  "big_shift": {
+   "period": "2011-12",
+   "pct": -57.0
+  }
+ },
+ "correlations": [
+  {
+   "a": "Quantity",
+   "b": "Amount",
+   "r": 0.827
+  }
+ ],
+ "alerts": [
+  "🔴 存在 314891 行完全重复的数据（重复行会让统计结果被重复计入）",
+  "🟡 列 [Quantity] 有 51983 个离群值（占 6.45%，IQR 口径）（先确认是真实极端值还是录入错误；盖帽不删行）",
+  "🟡 列 [Price] 有 67346 个离群值（占 8.36%，IQR 口径）（先确认是真实极端值还是录入错误；盖帽不删行）",
+  "🟡 列 [Amount] 有 66382 个离群值（占 8.24%，IQR 口径）（先确认是真实极端值还是录入错误；盖帽不删行）",
+  "🔵 列 [InvoiceNo] 内容几乎全是数字（可转数值比例约 100.0%）（文本数字无法直接计算，建议转为数值类型）",
+  "🔵 列 [CustomerID] 内容几乎全是数字（可转数值比例约 100.0%）（文本数字无法直接计算，建议转为数值类型）",
+  "🔵 列 [InvoiceDate] 看起来是日期列（当前为文本）（转为日期后才能做趋势、重采样）",
+  "🔵 列 [Quantity] 分布严重右偏（偏度 406.42）（均值会被极端值拉偏，看中位数更稳）",
+  "🔵 列 [Price] 分布严重右偏（偏度 244.34）（均值会被极端值拉偏，看中位数更稳）",
+  "🔵 列 [Country] 高度集中：「United Kingdom」占 90.03%",
+  "🔵 列 [Amount] 分布严重右偏（偏度 586.62）（均值会被极端值拉偏，看中位数更稳）",
+  "🟢 [Quantity] 与 [Amount] 强正相关（r=0.827）",
+  "🟢 时间范围 2009-12-01 ~ 2011-12-09（738 天）：Quantity 按月整体呈波动（首末期变化 -28.17%）"
+ ],
+ "quality_score": {
+  "score": 77.5,
+  "level": "良好",
+  "color": "#007aff",
+  "deductions": [
+   {
+    "reason": "314891 行重复数据",
+    "cut": 15.0
+   },
+   {
+    "reason": "1 个严重问题（结构/格式）",
+    "cut": 3
+   },
+   {
+    "reason": "3 个警告级问题",
+    "cut": 4.5
+   }
+  ],
+  "note": "评分基于重复、缺失、结构/格式问题与异常值的加权扣分（满分 100）"
+ }
+}

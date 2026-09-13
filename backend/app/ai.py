@@ -32,20 +32,16 @@ CHART_SPEC_PROMPT = (
     '{"kind": "<分析类型>", "params": {<参数>}, "title": "<简短中文标题>"}\n'
     "可选 kind 与必填参数：\n"
     '- groupby: {"by": ["分组列"], "metrics": [{"column": "数值列", "agg": "sum|mean|count|min|max|median|std|nunique"}]}\n'
-    '- pivot: {"index": "行维度", "columns": "列维度或null", "values": "数值列", "aggfunc": "sum"}\n'
-    "- trend / growth / moving_avg: {\"date_column\": \"日期列\", \"value_column\": \"数值列\", \"freq\": \"D|W|M|Q|Y\""
-    "（moving_avg 额外 \"window\": 整数≥2）}\n"
+    "- trend: {\"date_column\": \"日期列\", \"value_column\": \"数值列\", \"freq\": \"D|W|M|Q|Y\"}\n"
     '- corr: {"columns": ["数值列"...] 或省略}\n'
     '- histogram: {"column": "数值列", "bins": 整数}\n'
     "- boxplot: {\"columns\": [\"数值列\"...] 或省略}\n"
     '- value_counts: {"column": "列", "top": 整数}\n'
     "- describe: {}\n"
-    '- rfm: {"id_column": "客户列", "date_column": "日期列", "value_column": "金额列"}\n'
-    '- pareto: {"category_column": "类别列", "value_column": "数值列", "top_n": 整数}\n'
     "- outliers: {\"columns\": [\"数值列\"] 或省略, \"method\": \"iqr|zscore\"}\n"
     '- scatter: {"x": "数值列", "y": "数值列"}\n'
     "- cross_heat: {\"row\": \"类别列\", \"col\": \"类别列\"}\n"
-    "要求：列名必须与摘要中的列名完全一致；日期列若是文本日期也可以直接用于 trend/growth；"
+    "要求：列名必须与摘要中的列名完全一致；日期列若是文本日期也可以直接用于 trend；"
     "不确定时选择最贴近用户意图的类型。"
 )
 

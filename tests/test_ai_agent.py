@@ -38,7 +38,7 @@ def chunk(delta=None, tool_calls=None):
     return "data: " + json.dumps({"choices": [{"delta": d}]}, ensure_ascii=False)
 
 
-def tool_call(idx=0, call_id="call_1", name="rfm", arguments="{}"):
+def tool_call(idx=0, call_id="call_1", name="describe", arguments="{}"):
     return [{"index": idx, "id": call_id, "function": {"name": name, "arguments": arguments}}]
 
 
@@ -68,32 +68,44 @@ def run_agent(monkeypatch, scripted, msg="帮我分析", sid=""):
 
 
 def test_tool_roundtrip_executes_locally(monkeypatch):
-    args1 = json.dumps({"id_column": "客户", "date_column": "日期", "value_column": "金额"})
+    args1 = json.dumps({"by": ["客户"], "metrics": [{"column": "金额", "agg": "sum"}]})
     scripted = [
-        [chunk(tool_calls=tool_call(name="rfm", arguments=args1[:8])), chunk(tool_calls=tool_call(name="rfm", arguments=args1[8:])), "data: [DONE]"],
-        [chunk("RFM"), chunk("分析完成，"), chunk("高价值客户 1 人。"), "data: [DONE]"],
+        [chunk(tool_calls=tool_call(name="groupby", arguments=args1[:8])), chunk(tool_calls=tool_call(name="groupby", arguments=args1[8:])), "data: [DONE]"],
+        [chunk("分组"), chunk("统计完成，"), chunk("u3 消费金额最高。"), "data: [DONE]"],
     ]
     events, payloads = run_agent(monkeypatch, scripted)
 
     types = [e["type"] for e in events]
     assert "tool_start" in types and "tool_result" in types and "done" in types
     start = next(e for e in events if e["type"] == "tool_start")
-    assert start["name"] == "rfm" and "RFM" in start["label"]
+    assert start["name"] == "groupby" and "分组" in start["label"]
     result = next(e for e in events if e["type"] == "tool_result")
-    assert result["card"]["type"] == "rfm"
-    assert result["card"]["payload"]["rows"], "本地真实执行的 RFM 应有结果行"
+    assert result["card"]["type"] == "table"
+    assert result["card"]["payload"]["rows"], "本地真实执行的分组聚合应有结果行"
     text = "".join(e.get("text", "") for e in events if e["type"] == "delta")
-    assert text == "RFM分析完成，高价值客户 1 人。"
+    assert text == "分组统计完成，u3 消费金额最高。"
     # 第二轮请求应包含 tool 消息回填
     second = payloads[1]["messages"]
     assert second[-1]["role"] == "tool" and second[-2]["role"] == "assistant"
     assert any("金额" in m.get("content", "") or "error" in m.get("content", "") for m in second if m["role"] == "tool")
 
 
+def test_health_check_tool_runs(monkeypatch):
+    scripted = [
+        [chunk(tool_calls=tool_call(name="health_check", arguments="{}")), "data: [DONE]"],
+        [chunk("体检完成，数据基本健康。"), "data: [DONE]"],
+    ]
+    events, _ = run_agent(monkeypatch, scripted)
+    result = next(e for e in events if e["type"] == "tool_result")
+    assert result["card"]["type"] == "insight"
+    assert 0 <= result["card"]["payload"]["quality_score"]["score"] <= 100
+    assert isinstance(result["card"]["payload"]["findings"], list)
+
+
 def test_tool_error_feeds_back_and_recovers(monkeypatch):
     scripted = [
-        [chunk(tool_calls=tool_call(name="rfm", arguments='{"id_column": "客户", "date_column": "不存在列"}')), "data: [DONE]"],
-        [chunk(tool_calls=tool_call(call_id="call_2", name="rfm", arguments='{"id_column": "客户", "date_column": "日期", "value_column": "金额"}')), "data: [DONE]"],
+        [chunk(tool_calls=tool_call(name="groupby", arguments='{"by": ["不存在列"], "metrics": [{"column": "金额", "agg": "sum"}]}')), "data: [DONE]"],
+        [chunk(tool_calls=tool_call(call_id="call_2", name="groupby", arguments='{"by": ["客户"], "metrics": [{"column": "金额", "agg": "sum"}]}')), "data: [DONE]"],
         [chunk("已修正参数并完成分析。"), "data: [DONE]"],
     ]
     events, payloads = run_agent(monkeypatch, scripted)
@@ -185,25 +197,15 @@ def test_stream_endpoint_without_config(monkeypatch):
 
 def test_tools_schema_complete():
     names = {t["name"] for t in agent.TOOLS}
-    assert {"describe", "groupby", "trend", "corr", "histogram", "value_counts", "rfm", "funnel", "cohort", "cluster", "prop_z_test", "forecast"} <= names
+    assert {"health_check", "describe", "groupby", "trend", "corr", "histogram", "value_counts"} <= names
     for f in agent.TOOLS_SCHEMA:
         assert f["type"] == "function" and f["function"]["parameters"]["type"] == "object"
 
 
-# ---------- 工具注册表冒烟：12 个工具在本地真实执行 ----------
+# ---------- 工具注册表冒烟：全部工具在本地真实执行 ----------
 
 
 def _tool_df(name):
-    if name in ("funnel", "cohort"):
-        return pd.DataFrame({
-            "uid": [f"u{i % 5}" for i in range(90)],
-            "event": [["浏览", "加购", "下单"][i % 3] for i in range(90)],
-            "date": pd.date_range("2026-01-01", periods=90, freq="D"),
-        })
-    if name == "cluster":
-        return pd.DataFrame({"a": range(30), "b": [x * 2 + (i % 3) for i, x in enumerate(range(30))]})
-    if name == "prop_z_test":
-        return None
     return pd.DataFrame({
         "cat": ["x", "y", "x", "y", "x"] * 4,
         "date": pd.date_range("2026-01-01", periods=20, freq="D"),
@@ -213,18 +215,13 @@ def _tool_df(name):
 
 
 TOOL_PARAMS = {
+    "health_check": ({}, "df"),
     "describe": ({}, "df"),
     "groupby": ({"by": ["cat"], "metrics": [{"column": "val", "agg": "sum"}]}, "df"),
     "trend": ({"date_column": "date", "value_column": "val", "freq": "D"}, "df"),
     "corr": ({"columns": ["val", "val2"]}, "df"),
     "histogram": ({"column": "val"}, "df"),
     "value_counts": ({"column": "cat"}, "df"),
-    "rfm": ({"id_column": "cat", "date_column": "date", "value_column": "val"}, "df"),
-    "funnel": ({"user_column": "uid", "event_column": "event", "steps": ["浏览", "加购", "下单"]}, "funnel"),
-    "cohort": ({"user_column": "uid", "date_column": "date", "freq": "M", "periods": 2}, "funnel"),
-    "cluster": ({"columns": ["a", "b"], "k": 2}, "cluster"),
-    "prop_z_test": ({"success_a": 120, "n_a": 1000, "success_b": 150, "n_b": 1000}, "prop_z_test"),
-    "forecast": ({"date_column": "date", "value_column": "val", "freq": "D", "horizon": 3}, "df"),
 }
 
 
@@ -255,12 +252,11 @@ def test_tool_result_event_on_failure(monkeypatch):
     """P1 回归：工具失败也要发 tool_result(card=None,error)，前端据此撤 spinner。"""
     monkeypatch.setattr(agent, "load_config", lambda: {"api_key": "k", "base_url": "http://x", "model": "m"})
     scripted = [
-        FakeResp([chunk(tool_calls=tool_call(name="rfm", arguments='{"id_column": "x", "date_column": "y", "value_column": "z"}')), "data: [DONE]"]),
+        FakeResp([chunk(tool_calls=tool_call(name="groupby", arguments='{"by": ["x"], "metrics": [{"column": "y", "agg": "sum"}]}')), "data: [DONE]"]),
         FakeResp([chunk("已处理失败"), "data: [DONE]"]),
     ]
     holder = {"i": 0}
-    monkeypatch.setattr(agent, "_post_llm", lambda cfg, payload, timeout: scripted[holder["i"]] or scripted.__setitem__("i", holder["i"] + 1))
-    # 上面的 lambda 有点绕，换成显式函数
+
     def fake_post(cfg, payload, timeout):
         r = scripted[holder["i"]]
         holder["i"] += 1

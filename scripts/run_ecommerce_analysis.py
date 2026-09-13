@@ -1,11 +1,11 @@
-"""端到端电商案例：上传百万行 UCI Online Retail II → 通过本工具 HTTP API 跑完整分析。
+"""端到端预处理案例：上传百万行 UCI Online Retail II → 体检 → 清洗 → 复检 → 导出。
 
 数据文件不进 git：先运行 scripts/fetch_dataset.py 下载数据，再运行本脚本：
     .venv/Scripts/python.exe scripts/run_ecommerce_analysis.py
 
-流程：启动临时后端 → 流式上传 CSV（>16MB 自动走分块 Parquet 路径）→
-SQL 清洗/派生 → RFM / 同期群留存 / K-means 聚类 / 生命周期漏斗 / 复购与 LTV / 退货与地理
-→ 全部响应 JSON 存 examples/ecommerce/results/，控制台输出关键结论数字。
+流程：启动临时后端（仅本机回环）→ 流式上传 CSV（>16MB 自动走分块 Parquet 路径）→
+数据体检（找问题）→ SQL 清洗建新集（排取消单/退货/散单）→ 再次体检对比评分 →
+快速统计（月度趋势/异常值）→ 导出清洗后 CSV，全部响应 JSON 存 examples/ecommerce/results/。
 """
 import json
 import os
@@ -26,8 +26,6 @@ BASE = f"http://127.0.0.1:{PORT}"
 SCRATCH = ROOT / "data" / "ecommerce_demo"
 RESULTS = ROOT / "examples" / "ecommerce" / "results"
 
-_obs_end = "2011-12-10"  # 观测终点：数据集最大日期(2011-12-09) + 1 天，计算 R 用的基准日
-
 
 def main() -> int:
     if not CSV_PATH.exists():
@@ -37,7 +35,9 @@ def main() -> int:
     shutil.rmtree(SCRATCH, ignore_errors=True)
     SCRATCH.mkdir(parents=True)
 
-    env = dict(os.environ, DATA_HELPER_DATA=str(SCRATCH))
+    # 父进程同样指向 SCRATCH：health_check/export 走进程内直调时读到同一批数据集
+    os.environ["DATA_HELPER_DATA"] = str(SCRATCH)
+    env = dict(os.environ)
     proc = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "backend.app.main:app", "--port", str(PORT), "--log-level", "warning"],
         cwd=ROOT, env=env,
@@ -92,12 +92,6 @@ def sql(query: str, current_id: str = "", save_as: str = "") -> dict:
     return r.json()
 
 
-def sql_df(result: dict):
-    """把 /api/sql 响应转成 [{列: 值}]，便于打印与存档。"""
-    names = [c["name"] for c in result["columns"]]
-    return [dict(zip(names, row)) for row in result["rows"]]
-
-
 def new_dataset_from_sql(name: str, query: str, base_id: str) -> str:
     res = sql(query, current_id=base_id, save_as=name)
     ds = res["new_dataset"]["id"]
@@ -114,10 +108,32 @@ def analyze(ds_id: str, kind: str, params: dict) -> dict:
     return r.json()
 
 
-def biz_run(ds_id: str, tool: str, params: dict) -> dict:
-    r = requests.post(BASE + f"/api/datasets/{ds_id}/{tool}", timeout=300, json={"params": params})
-    r.raise_for_status()
-    return r.json()
+def health_check(ds_id: str) -> dict:
+    """进程内直调体检引擎：数据集在同一 data 目录（DATA_HELPER_DATA 指向 SCRATCH）。"""
+    from backend.app import insights as insights_mod
+    from backend.app import storage as storage_mod
+
+    return insights_mod.run_insights(storage_mod.load_df(ds_id), storage_mod.get_meta(ds_id))
+
+
+def print_health(tag: str, h: dict):
+    qs = h["quality_score"]
+    print(f"  [{tag}] 质量评分 {qs['score']}（{qs['level']}），问题 {len(h['findings'])} 项：")
+    for f in h["findings"][:6]:
+        print(f"    {f['level']:5} {f['category']:9} {f['msg']}")
+    if len(h["findings"]) > 6:
+        print(f"    … 其余 {len(h['findings']) - 6} 项详见 JSON")
+
+
+def export_clean_csv(ds_id: str) -> Path:
+    """进程内导出清洗后的 CSV。"""
+    from backend.app import exporter
+    from backend.app import storage as storage_mod
+
+    path = exporter.export_df(storage_mod.load_df(ds_id), "online_retail_clean", "csv")
+    dest = SCRATCH / "online_retail_clean.csv"
+    shutil.copyfile(path, dest)
+    return dest
 
 
 def run_analysis():
@@ -132,8 +148,12 @@ def run_analysis():
     save("00_upload_meta", meta)
     a = _alias(raw_id)
 
-    print("[2/6] SQL 清洗与派生…")
-    # 有效销售（排除取消单/退货行/无客户ID）；CustomerID 转文本以便 UI 侧也归为类别列
+    print("[2/6] 原始数据体检…")
+    h1 = health_check(raw_id)
+    save("01_health_check_raw", h1)
+    print_health("原始", h1)
+
+    print("[3/6] SQL 清洗：排除取消单/退货行/无客户ID散单，派生金额列…")
     clean = f'''
     SELECT "InvoiceNo", CAST(CAST("CustomerID" AS BIGINT) AS VARCHAR) AS "CustomerID", "InvoiceDate",
            "Quantity", "Price", "Country",
@@ -143,119 +163,26 @@ def run_analysis():
     '''
     clean_id = new_dataset_from_sql("有效销售明细", clean, raw_id)
 
-    print("[3/6] RFM 客户分层…")
-    rfm = analyze(clean_id, "rfm", {"id_column": "CustomerID", "date_column": "InvoiceDate", "value_column": "Amount"})
-    save("01_rfm", rfm)
-    seg_rows = rfm["rows"]
-    print("  RFM 分层（前 8 段）:")
-    for row in seg_rows[:8]:
-        print("   ", row[0], row[1])
-    print("  ", rfm.get("note", ""))
+    print("[4/6] 清洗后复检（评分对比）…")
+    h2 = health_check(clean_id)
+    save("02_health_check_clean", h2)
+    print_health("清洗后", h2)
+    print(f"  评分变化：{h1['quality_score']['score']} → {h2['quality_score']['score']}，"
+          f"问题数 {len(h1['findings'])} → {len(h2['findings'])}")
 
-    print("[4/6] 同期群留存…")
-    cohort = biz_run(clean_id, "cohort", {"user_column": "CustomerID", "date_column": "InvoiceDate", "freq": "M", "periods": 12})
-    save("02_cohort", cohort)
-    print("  ", cohort.get("note", ""))
+    print("[5/6] 快速统计：月度趋势与金额异常值…")
+    trend = analyze(clean_id, "trend", {"date_column": "InvoiceDate", "value_column": "Amount", "freq": "M", "agg": "sum"})
+    save("03_monthly_trend", trend)
+    print(f"  月度趋势：{len(trend['rows'])} 个月，{trend['note']}")
+    outliers = analyze(clean_id, "outliers", {"columns": ["Amount"], "method": "iqr"})
+    save("04_outliers", outliers)
+    print(f"  异常值：{outliers['rows'][0][3]} 个离群（{outliers['rows'][0][4]}%），可在清洗中盖帽处理")
 
-    print("[5/6] K-means 聚类（RFM 三指标）× 生命周期漏斗…")
-    cust_sql = f'''
-    WITH s AS (SELECT * FROM {_alias(clean_id)}),
-    percust AS (
-      SELECT "CustomerID" AS uid,
-             COUNT(DISTINCT "InvoiceNo") AS frequency,
-             SUM("Amount") AS monetary,
-             CAST(date_diff('day', CAST(MAX("InvoiceDate") AS TIMESTAMP), DATE '{_obs_end}') AS INT) AS recency_days
-      FROM s GROUP BY 1
-    )
-    SELECT * FROM percust
-    '''
-    cust_id = new_dataset_from_sql("客户RFM指标", cust_sql, clean_id)
-    cluster = biz_run(cust_id, "cluster", {"columns": ["recency_days", "frequency", "monetary"], "standardize": True})
-    save("03_cluster", cluster)
-    print("  ", cluster.get("note", ""))
+    print("[6/6] 导出清洗后数据（CSV，交给专业分析软件）…")
+    out = export_clean_csv(clean_id)
+    print(f"  已导出 {out}（{out.stat().st_size / 1048576:.1f} MB）——清洗完成，后续深度分析交给你的主力工具")
 
-    events_sql = f'''
-    WITH s AS (SELECT * FROM {_alias(clean_id)}),
-    percust AS (
-      SELECT "CustomerID" AS uid,
-             COUNT(DISTINCT "InvoiceNo") AS orders_cnt,
-             SUM("Amount") AS total_amt
-      FROM s GROUP BY 1
-    ),
-    q75 AS (SELECT quantile_cont(total_amt, 0.75) AS t75 FROM percust)
-    SELECT CAST(uid AS VARCHAR) AS uid, event FROM (
-      SELECT uid, '首购' AS event FROM percust
-      UNION ALL
-      SELECT uid, '复购' FROM percust WHERE orders_cnt >= 2
-      UNION ALL
-      SELECT uid, '高价值' FROM percust CROSS JOIN q75 WHERE total_amt >= t75
-    )
-    '''
-    events_id = new_dataset_from_sql("客户生命周期事件", events_sql, clean_id)
-    funnel = biz_run(events_id, "funnel", {"user_column": "uid", "event_column": "event", "steps": ["首购", "复购", "高价值"]})
-    save("04_funnel", funnel)
-    print("  ", funnel.get("note", ""))
-
-    print("[6/6] 复购率 / LTV / 退货与地理…")
-    ltv = sql(f'''
-    WITH s AS (SELECT * FROM {_alias(clean_id)}),
-    percust AS (
-      SELECT "CustomerID" AS uid, COUNT(DISTINCT "InvoiceNo") AS orders_cnt, SUM("Amount") AS total_amt
-      FROM s GROUP BY 1
-    )
-    SELECT COUNT(*) AS 客户数,
-           SUM(CASE WHEN orders_cnt >= 2 THEN 1 ELSE 0 END) AS 复购客户数,
-           ROUND(100.0 * SUM(CASE WHEN orders_cnt >= 2 THEN 1 ELSE 0 END) / COUNT(*), 2) AS 复购率pct,
-           ROUND(AVG(total_amt), 2) AS 平均LTV,
-           ROUND(MEDIAN(total_amt), 2) AS 中位LTV,
-           ROUND(MAX(total_amt), 2) AS 最高LTV
-    FROM percust
-    ''', current_id=clean_id)
-    save("05_ltv", ltv)
-    print("  ", sql_df(ltv)[0])
-
-    geo = sql(f'''
-    SELECT "Country" AS 国家,
-           COUNT(DISTINCT "InvoiceNo") AS 订单数,
-           ROUND(SUM(CASE WHEN "Quantity" > 0 AND "InvoiceNo" NOT LIKE 'C%' THEN "Quantity" * "Price" ELSE 0 END), 0) AS 销售额,
-           ROUND(SUM(CASE WHEN "Quantity" < 0 OR "InvoiceNo" LIKE 'C%' THEN -"Quantity" * "Price" ELSE 0 END), 0) AS 退货额
-    FROM {_alias(raw_id)}
-    WHERE "CustomerID" IS NOT NULL
-    GROUP BY 1 HAVING COUNT(DISTINCT "InvoiceNo") > 200
-    ORDER BY 销售额 DESC LIMIT 12
-    ''', current_id=raw_id)
-    save("06_geo", geo)
-    for row in sql_df(geo):
-        print("  ", row)
-
-    ret = sql(f'''
-    SELECT ROUND(100.0 * SUM(CASE WHEN "Quantity" < 0 THEN 1 ELSE 0 END) / COUNT(*), 2) AS 退货行占比pct,
-           ROUND(SUM(CASE WHEN "Quantity" < 0 THEN -"Quantity" * "Price" ELSE 0 END) / 1000.0, 1) AS 退货金额k,
-           COUNT(DISTINCT "CustomerID") AS 客户数
-    FROM {_alias(raw_id)} WHERE "CustomerID" IS NOT NULL
-    ''', current_id=raw_id)
-    save("07_return_overall", ret)
-    print("  ", sql_df(ret)[0])
-
-    extra = sql(f'''
-    WITH s AS (SELECT * FROM {_alias(clean_id)}),
-    cust AS (SELECT "CustomerID" AS uid, SUM("Amount") AS amt FROM s GROUP BY 1),
-    ranked AS (SELECT uid, amt, ntile(10) OVER (ORDER BY amt) AS decile FROM cust),
-    share AS (SELECT ROUND(100.0 * SUM(CASE WHEN decile = 10 THEN amt ELSE 0 END) / SUM(amt), 1) AS top10_share
-              FROM ranked),
-    inv AS (SELECT COUNT(DISTINCT "InvoiceNo") AS n_inv, ROUND(SUM("Amount"), 0) AS total_amt FROM s)
-    SELECT n_inv AS 订单数, ROUND(total_amt / n_inv, 2) AS 客单价, top10_share AS 头部10pct客户金额占比pct
-    FROM inv CROSS JOIN share
-    ''', current_id=clean_id)
-    save("08_overview", extra)
-    print("  ", sql_df(extra)[0])
-
-    print("[补] 强制 k=4 聚类（对照 RFM 规则分层）…")
-    cluster4 = biz_run(cust_id, "cluster", {"columns": ["recency_days", "frequency", "monetary"], "k": 4, "standardize": True})
-    save("03b_cluster_k4", cluster4)
-    print("  ", cluster4.get("note", ""))
-
-    print(f"\n全部结果已存 {RESULTS}")
+    print(f"\n[done] 预处理流水线跑通：体检发现问题 → SQL 清洗 → 复检对比 → 导出。结果已存 {RESULTS}")
 
 
 if __name__ == "__main__":

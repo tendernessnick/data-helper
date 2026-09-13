@@ -55,32 +55,11 @@ def test_sql_tool_rejects_mutation(ds):
         mcpserver.tool_sql_query("DELETE FROM df", dataset_id=ds)
 
 
-def test_rfm_funnel_cohort_tools(ds):
-    rfm = json.loads(mcpserver.tool_rfm(ds, id_column="客户", date_column="日期", value_column="金额"))
-    assert rfm["rows"] and "分层" in json.dumps(rfm, ensure_ascii=False)
-    # 漏斗需要独立事件表（用户列≠事件列）
-    from backend.app import storage
-    ev = pd.DataFrame({
-        "uid": ["a", "a", "b", "b", "c"],
-        "event": ["浏览", "下单", "浏览", "下单", "浏览"],
-    })
-    ev_id = storage.create_dataset("mcp事件", ev, "ev.csv", ev.to_csv(index=False).encode("utf-8-sig"))
-    try:
-        funnel = json.loads(mcpserver.tool_funnel(ev_id, user_column="uid", event_column="event", steps=["浏览", "下单"]))
-        assert funnel["funnel"]["values"] == [3, 2]
-        from backend.app.analysis import AnalysisError
-
-        with pytest.raises(AnalysisError):
-            mcpserver.tool_funnel(ev_id, user_column="uid", event_column="uid", steps=["浏览", "下单"])  # 同列防护
-    finally:
-        storage.delete_dataset(ev_id)
-    cohort = json.loads(mcpserver.tool_cohort(ds, user_column="客户", date_column="日期", freq="W"))
-    assert cohort["cohort"]["values"]
-
-
-def test_ab_prop_test_count_mode():
-    out = json.loads(mcpserver.tool_ab_prop_test(success_a=120, n_a=1000, success_b=150, n_b=1000))
-    assert out["tests"][0]["p"] == pytest.approx(0.0496, abs=1e-3)
+def test_health_check_tool(ds):
+    out = json.loads(mcpserver.tool_health_check(ds))
+    assert 0 <= out["quality_score"]["score"] <= 100
+    assert isinstance(out["findings"], list)
+    assert isinstance(out["alerts"], list) and out["alerts"]
 
 
 def test_rows_capped():
@@ -139,7 +118,7 @@ def test_mcp_endpoint_initialize_and_tools_list():
         )
         assert r2.status_code == 200, r2.text[:300]
         names = [t.get("name") for t in _extract_tools(r2.text)]
-        assert {"list_datasets", "sql_query", "rfm", "funnel", "cohort", "cluster", "ab_prop_test", "forecast"} <= set(names)
+        assert {"list_datasets", "sql_query", "health_check", "describe", "groupby", "correlation", "value_counts", "trend"} <= set(names)
 
 
 def _extract_tools(text: str):

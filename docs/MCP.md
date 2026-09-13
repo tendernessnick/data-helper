@@ -1,6 +1,6 @@
 # MCP 外接 AI 使用指南
 
-> 不用内置对话页：在 **Cherry Studio / ChatWise** 等成熟聊天客户端里填你自己的 API Key，把本软件添加为 MCP 工具源——客户端里的 AI 就能直接调用本软件的分析能力（RFM / 漏斗 / 留存 / 聚类 / A-B 检验 / SQL / 预测等 15 个工具）。
+> 不用内置对话页：在 **Cherry Studio / ChatWise** 等成熟聊天客户端里填你自己的 API Key，把本软件添加为 MCP 工具源——客户端里的 AI 就能直接调用本软件的数据体检与预处理分析能力（体检 / SQL / 统计摘要等 10 个只读工具）。
 >
 > 隐私边界与内置 AI 一致：**LLM 在客户端侧（你的 Key），工具调用回本机执行，原始数据不出本机**。
 
@@ -26,11 +26,11 @@ http://127.0.0.1:8765/sse/sse      ← SSE（旧版客户端兼容）
 3. **添加 MCP 服务器**：设置 → MCP 服务器 → 添加：
    - 类型选 **Streamable HTTP**（旧版本选 SSE）
    - URL 粘贴上面的 MCP 地址
-   - 保存后确认工具列表出现 `data-helper` 的 15 个工具（list_datasets / sql_query / rfm / funnel / cohort / cluster / ab_prop_test / forecast …）
+   - 保存后确认工具列表出现 `data-helper` 的 10 个工具（list_datasets / sql_query / health_check / describe / groupby …）
 4. **使用**：先在数据小助手里导入/生成数据集，然后到 Cherry Studio 对话：
-   > "看看我本机有哪些数据集，对销售数据做一次 RFM 分层，并解读结果"
+   > "看看我本机有哪些数据集，给销售数据做一次体检，有哪些问题、先修哪个？"
 
-   AI 会自动调用 list_datasets → column_profile → rfm 并基于真实结果回答。
+   AI 会自动调用 list_datasets → column_profile → health_check 并基于真实体检结果给清洗建议。
 
 ## 三、其他客户端
 
@@ -40,21 +40,16 @@ http://127.0.0.1:8765/sse/sse      ← SSE（旧版客户端兼容）
 | 5ire / 其他 MCP 面板 | MCP 服务器 → 添加 URL | Streamable HTTP 或 SSE |
 | 自研脚本 | `mcp` Python/TS SDK `streamablehttp_client(url)` | Streamable HTTP |
 
-## 四、工具清单（15 个）
+## 四、工具清单（10 个）
 
 | 工具 | 用途 |
 |---|---|
-| `list_datasets` | 列出本机数据集（id/名称/行列/列名）——分析的第一步 |
+| `list_datasets` | 列出本机数据集（id/名称/行列/列名）——检查的第一步 |
 | `column_profile` | 每列类型/缺失/唯一值/统计量/高频值——选列依据 |
 | `read_rows` | 分页预览原始行 |
 | `sql_query` | 只读 SQL（DuckDB；跨数据集 JOIN 用 ds1/ds2…别名） |
+| `health_check` | **数据体检**：质量评分 0-100 + 结构化问题清单（缺失/重复/类型混乱/格式脏污/异常值/日期问题，每条含级别/列/样本证据） |
 | `describe` / `groupby` / `correlation` / `value_counts` / `trend` | 描述统计/分组聚合/相关矩阵/频次/时间趋势 |
-| `rfm` | RFM 客户分层（五分位 8 层 + 金额占比） |
-| `funnel` | 转化漏斗（到达制口径） |
-| `cohort` | 同期群留存矩阵（月/周） |
-| `cluster` | K-means 聚类（肘部法+轮廓系数自动选 k） |
-| `ab_prop_test` | A/B 两比例 z 检验（p 值/差值 CI/相对提升） |
-| `forecast` | 时序预测（三方法回测选优 + 区间） |
 
 返回给 AI 的结果统一做了行数裁剪（默认 200 行），避免撑爆上下文。
 
@@ -68,4 +63,4 @@ http://127.0.0.1:8765/sse/sse      ← SSE（旧版客户端兼容）
 
 - **客户端连不上**：确认软件正在运行、端口与地址一致；浏览器直接访问 MCP 地址返回 406/400 是正常现象（它要求特定的 MCP 协议头），不代表服务挂了。
 - **AI 说找不到工具**：在客户端里确认 MCP 服务器已启用、工具列表已加载。
-- **exe 版**：内置 `mcp` 依赖；若使用精简打包导致不可用，界面设置弹窗仍会显示地址但工具列表为空——用源码方式启动即可。
+- **exe 版**：内置 `mcp` 依赖；若使用精简打包导致不可用，顶栏「🔌 MCP」弹窗仍会显示地址但工具列表为空——用源码方式启动即可。

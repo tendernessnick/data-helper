@@ -113,90 +113,12 @@ def test_text_stats_endpoint_via_insights():
     assert ins["overview"]["rows"] == 30
 
 
-# ---------- 统计检验 ----------
 
 
-def test_normality():
-    rng = np.random.default_rng(1)
-    df = pd.DataFrame({"x": rng.normal(0, 1, 500)})
-    ds = upload_df(df)
-    r = client.post(f"/api/datasets/{ds}/test", json={"test": "normality", "params": {"column": "x"}})
-    assert r.status_code == 200, r.text
-    body = r.json()
-    sw = next(t for t in body["tests"] if t["name"] == "Shapiro-Wilk")
-    assert sw["significant"] is False  # 正态数据不应拒绝
 
 
-def test_compare_groups_two_and_three():
-    df = pd.DataFrame({
-        "组": ["A"] * 30 + ["B"] * 30 + ["C"] * 10,
-        "值": [10.0] * 30 + [20.0] * 30 + [15.0] * 10,
-    })
-    df.loc[df["组"] == "B", "值"] += np.random.default_rng(2).normal(0, 1, 30)
-    ds = upload_df(df)
-    r = client.post(f"/api/datasets/{ds}/test", json={"test": "compare_groups", "params": {"group_column": "组", "value_column": "值"}})
-    assert r.status_code == 200
-    body = r.json()
-    assert body["n_groups"] == 3
-    t = next(x for x in body["tests"] if "ANOVA" in x["name"])
-    assert t["significant"] is True  # A vs B 差异明显
-
-    df2 = df[df["组"] != "C"]
-    ds2 = upload_df(df2)
-    r2 = client.post(f"/api/datasets/{ds2}/test", json={"test": "compare_groups", "params": {"group_column": "组", "value_column": "值"}})
-    names = [x["name"] for x in r2.json()["tests"]]
-    assert any("t 检验" in n for n in names)
 
 
-def test_chi2():
-    rng = np.random.default_rng(3)
-    df = pd.DataFrame({
-        "性别": rng.choice(["男", "女"], 200),
-        "偏好": rng.choice(["苹果", "香蕉"], 200),
-    })
-    ds = upload_df(df)
-    r = client.post(f"/api/datasets/{ds}/test", json={"test": "chi2", "params": {"column_a": "性别", "column_b": "偏好"}})
-    assert r.status_code == 200
-    body = r.json()
-    assert body["contingency"]["values"][0][0] > 0
-    assert 0 <= body["cramers_v"] <= 1
-
-
-def test_corr_test_significant():
-    rng = np.random.default_rng(4)
-    df = pd.DataFrame({"x": np.arange(100.0), "y": np.arange(100.0) * 2 + rng.normal(0, 1, 100)})
-    ds = upload_df(df)
-    r = client.post(f"/api/datasets/{ds}/test", json={"test": "corr_test", "params": {"column_x": "x", "column_y": "y"}})
-    body = r.json()
-    assert body["tests"][0]["significant"] is True
-    assert abs(body["tests"][0]["stat"]) > 0.99
-
-
-# ---------- 预测 ----------
-
-
-def test_forecast_linear_upward():
-    # 每月 1 号一条数据，24 个月干净月度序列
-    rows = [{"日期": date(2025 + i // 12, i % 12 + 1, 1).isoformat(), "销售额": 1000 + i * 100}
-            for i in range(24)]
-    ds = upload_df(pd.DataFrame(rows))
-    r = client.post(f"/api/datasets/{ds}/forecast", json={"kind": "forecast", "params": {"date_column": "日期", "value_column": "销售额", "freq": "M", "horizon": 3}})
-    assert r.status_code == 200, r.text
-    body = r.json()
-    assert len(body["rows"]) == 27  # 24历史 + 3预测
-    fv = body["forecast_meta"]["values"]
-    assert fv[-1] > fv[0] >= 3400  # 上升趋势延续（训练末值 2800 + 5期回测外推）
-    assert body["best"] in ("线性趋势", "指数平滑(Holt)")
-
-
-def test_forecast_insufficient_data():
-    df = pd.DataFrame({"日期": ["2025-01-01", "2025-02-01"], "销售额": [1, 2]})
-    ds = upload_df(df)
-    r = client.post(f"/api/datasets/{ds}/forecast", json={"params": {"date_column": "日期", "value_column": "销售额"}})
-    assert r.status_code == 400
-
-
-# ---------- 列级变换 ----------
 
 
 def _clean(ds, op, params):
@@ -247,15 +169,6 @@ def test_date_parts_and_regex():
 
 # ---------- 对比 / 采样 / 图表推荐 ----------
 
-
-def test_compare():
-    ds1 = upload_df(sales_df(100))
-    ds2 = upload_df(sales_df(80).assign(新列=1))
-    r = client.post(f"/api/datasets/{ds1}/compare", json={"other_id": ds2, "key": ""})
-    assert r.status_code == 200, r.text
-    body = r.json()
-    assert any("仅" in row[0] for row in body["rows"])
-    assert body["stat_rows"]
 
 
 def test_sample_create():

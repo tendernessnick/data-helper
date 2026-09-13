@@ -1,4 +1,7 @@
 """数据清洗操作。每个函数接收 (df, params)，返回 (新df, 摘要)。失败抛 CleanError。"""
+import math
+import re
+
 import pandas as pd
 
 
@@ -61,6 +64,9 @@ def fill_missing(df, params):
                 out[c] = out[c].ffill()
             elif method == "bfill":
                 out[c] = out[c].bfill()
+            elif method == "interpolate":
+                # 时序插值：按现有值线性内插，两端向外延伸；仅数值/日期列适用
+                out[c] = out[c].interpolate(limit_direction="both")
             else:
                 raise CleanError(f"未知填充方式: {method}")
         except (TypeError, ValueError) as e:
@@ -364,6 +370,282 @@ def regex_extract(df, params):
     return out, f"列 [{column}] 正则提取为新列 [{new_col}]（匹配 {matched}/{len(out)} 行）"
 
 
+# ---------------- 文本与格式清洗 ----------------
+
+# 首尾空白字符集合：半角/全角空格、制表符、零宽字符、BOM
+_WS_CHARS = " \t\r\n\u3000\u00a0\u200b\u200c\u200d\ufeff"
+# 控制字符 + 乱码替换符
+_CTRL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\ufffd]")
+# 千分位整数/小数（严格分组建组，避免把 "12,34" 误当数字）
+_THOUSAND_RE = re.compile(r"[+-]?\d{1,3}(,\d{3})+(\.\d+)?")
+_NUM_RE = re.compile(r"[+-]?(\d+(\.\d+)?|\.\d+)")
+_UNIT_MUL = (("亿", 1e8), ("万", 1e4), ("W", 1e4), ("w", 1e4), ("K", 1e3), ("k", 1e3))
+_CUR_RE = re.compile(r"[¥￥$€£\s]")
+_TRUE_SET = {"是", "true", "yes", "y", "1"}
+_FALSE_SET = {"否", "false", "no", "n", "0"}
+
+
+def to_halfwidth(s: str) -> str:
+    """全角转半角：全角空格→空格，FF01-FF5E 区段平移。"""
+    out = []
+    for ch in s:
+        o = ord(ch)
+        if o == 0x3000:
+            out.append(" ")
+        elif 0xFF01 <= o <= 0xFF5E:
+            out.append(chr(o - 0xFEE0))
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def parse_number_value(v, percent_scale: bool = False) -> float:
+    """把单个值智能解析为数字：支持千分位/货币符号/百分号/中文单位(万·亿)/全角数字。
+    解析失败返回 nan。体检检测与 parse_number 操作共用此函数，保证口径一致。"""
+    nan = float("nan")
+    if v is None:
+        return nan
+    if isinstance(v, bool):
+        return nan
+    if isinstance(v, str):
+        s = to_halfwidth(v).strip()
+        if not s:
+            return nan
+        mult = 1.0
+        for unit, m in _UNIT_MUL:
+            if s.endswith(unit):
+                mult = m
+                s = s[: -len(unit)]
+                break
+        s = _CUR_RE.sub("", s)
+        if s.endswith("%"):
+            s = s[:-1]
+            if percent_scale:
+                mult /= 100.0
+        if "," in s:
+            if not _THOUSAND_RE.fullmatch(s):
+                return nan
+            s = s.replace(",", "")
+        if not _NUM_RE.fullmatch(s):
+            return nan
+        try:
+            return float(s) * mult
+        except ValueError:
+            return nan
+    try:
+        f = float(v)
+        return f if math.isfinite(f) else nan
+    except (TypeError, ValueError):
+        return nan
+
+
+def _text_like(s: pd.Series) -> bool:
+    return s.dtype == object or str(s.dtype) in ("str", "string")
+
+
+def _map_text(s: pd.Series, fn):
+    """对文本列逐值变换：保留非字符串值与缺失，仅处理 str 实例。"""
+    return s.map(lambda v: fn(v) if isinstance(v, str) else v, na_action="ignore")
+
+
+def trim_whitespace(df, params):
+    """去首尾空白（含全角空格、零宽字符等），列内其他内容不动。"""
+    columns = params.get("columns") or []
+    if not columns:
+        raise CleanError("请选择要去空格的列")
+    _check_columns(df, columns)
+    out = df.copy()
+    n = 0
+    for c in columns:
+        if not _text_like(out[c]):
+            continue
+        before = out[c]
+        after = _map_text(before, lambda v: v.strip(_WS_CHARS))
+        n += int((before.astype("string") != after.astype("string")).sum())
+        out[c] = after
+    return out, f"去除 {len(columns)} 列的首尾空白（改动 {n} 个值）"
+
+
+def normalize_text(df, params):
+    """文本规范化：全角转半角、去控制/零宽/乱码字符、压缩连续空白为单个空格。
+    可选把空字符串转为缺失（empty_to_na）。"""
+    columns = params.get("columns") or []
+    empty_to_na = bool(params.get("empty_to_na", False))
+
+    def _fn(v: str):
+        t = to_halfwidth(v)
+        t = _CTRL_RE.sub("", t)
+        t = re.sub(r"\s+", " ", t).strip(_WS_CHARS)
+        if empty_to_na and t == "":
+            return None
+        return t
+
+    if not columns:
+        raise CleanError("请选择要规范化的列")
+    _check_columns(df, columns)
+    out = df.copy()
+    for c in columns:
+        if not _text_like(out[c]):
+            continue
+        out[c] = _map_text(out[c], _fn)
+    return out, (
+        f"规范化 {len(columns)} 列文本（全角→半角、去控制字符、压缩空白"
+        + ("、空字符串→缺失" if empty_to_na else "")
+        + "）"
+    )
+
+
+def parse_number(df, params):
+    """智能数值解析：把 '1,234' / '¥100' / '12%' / '1.5万' / 全角数字等解析为数值列。"""
+    column = params.get("column", "")
+    percent_scale = bool(params.get("percent_scale", False))
+    new_col = (params.get("new_column") or f"{column}_数值").strip()
+    if column not in df.columns:
+        raise CleanError(f"列不存在: {column}")
+    if not new_col:
+        new_col = column
+    out = df.copy()
+    parsed = out[column].map(lambda v: parse_number_value(v, percent_scale))
+    out[new_col] = parsed.astype("float64")
+    ok = int(parsed.notna().sum())
+    total = int(out[column].notna().sum())
+    if ok == 0:
+        raise CleanError(f"列 [{column}] 没有任何值能解析为数字")
+    target = f"新列 [{new_col}]" if new_col != column else "原列（覆盖）"
+    return out, f"列 [{column}] 数值解析 → {target}（成功 {ok}/{total}）"
+
+
+def map_values(df, params):
+    """值映射：按字典替换列中的取值（类别标准化），未命中的值可保留或置为缺失。"""
+    column = params.get("column", "")
+    mapping = params.get("mapping") or {}
+    keep_original = bool(params.get("keep_original", True))
+    if column not in df.columns:
+        raise CleanError(f"列不存在: {column}")
+    if not mapping:
+        raise CleanError("映射字典为空")
+    out = df.copy()
+    keys = {k: v for k, v in mapping.items()}
+
+    def _fn(v):
+        try:
+            if v in keys:
+                return keys[v]
+            if str(v) in keys:
+                return keys[str(v)]
+        except TypeError:  # 不可哈希单元格（list 等）直接走未命中分支
+            pass
+        return v if keep_original else None
+
+    before = out[column]
+    after = before.map(_fn, na_action="ignore")
+    hits = before.astype("string").ne(after.astype("string")).sum()
+    out[column] = after
+    return out, f"列 [{column}] 值映射（命中 {int(hits)} 个，未命中{'保留原值' if keep_original else '置为缺失'}）"
+
+
+def split_column(df, params):
+    """按分隔符拆分列：一列拆为多列（如 '省-市' → 两列）。"""
+    column = params.get("column", "")
+    sep = params.get("sep", "")
+    into = params.get("into") or []
+    if column not in df.columns:
+        raise CleanError(f"列不存在: {column}")
+    if not sep:
+        raise CleanError("分隔符不能为空")
+    out = df.copy()
+    parts = out[column].astype("string").str.split(sep, expand=True, regex=False)
+    if isinstance(parts, pd.Series):
+        parts = parts.to_frame()
+    n = parts.shape[1]
+    names = [str(x) for x in into[:n]] or [f"{column}_{i + 1}" for i in range(n)]
+    while len(names) < n:
+        names.append(f"{column}_{len(names) + 1}")
+    for nm in names:
+        if nm in df.columns and nm != column:
+            raise CleanError(f"新列名 [{nm}] 已存在")
+    for i, nm in enumerate(names):
+        out[nm] = parts[i]
+    return out, f"列 [{column}] 按 [{sep}] 拆分为 {n} 列: {', '.join(names)}"
+
+
+def cap_outliers(df, params):
+    """异常值盖帽（不删行）：超出上下界的值截断到边界。"""
+    columns = params.get("columns") or []
+    method = params.get("method", "iqr")
+    if not columns:
+        raise CleanError("请选择要盖帽的数值列")
+    _check_columns(df, columns)
+    from .analysis import outlier_bounds
+
+    out = df.copy()
+    capped = 0
+    for c in columns:
+        if not pd.api.types.is_numeric_dtype(out[c]):
+            raise CleanError(f"列 [{c}] 不是数值列")
+        if method == "zscore":
+            s2 = out[c].dropna()
+            if s2.empty:
+                continue
+            mean, std = float(s2.mean()), float(s2.std(ddof=0))
+            if std == 0:
+                continue
+            lower, upper = mean - 3 * std, mean + 3 * std
+        elif method == "iqr":
+            lower, upper, _ = outlier_bounds(out[c], "iqr")
+            if lower is None:
+                continue
+        else:
+            raise CleanError("method 仅支持 iqr / zscore")
+        _, _, mask = outlier_bounds(out[c], method)
+        capped += int(mask.fillna(False).sum())
+        out[c] = out[c].clip(lower, upper)
+    return out, f"盖帽 {len(columns)} 列异常值（共 {capped} 个值截断到边界，未删除任何行）"
+
+
+def drop_high_missing(df, params):
+    """按缺失率删除列（默认）或行：缺失率高于阈值的整列/整行删除。"""
+    threshold = float(params.get("threshold", 0.5))
+    axis = params.get("axis", "column")
+    if not (0 < threshold <= 1):
+        raise CleanError("阈值需在 (0, 1] 之间")
+    if axis == "row":
+        keep = df.isna().mean(axis=1) <= threshold
+        removed = int((~keep).sum())
+        out = df[keep].reset_index(drop=True)
+        return out, f"删除缺失率超 {threshold:.0%} 的行 {removed} 行"
+    cols = [c for c in df.columns if df[c].isna().mean() > threshold]
+    if len(cols) == df.shape[1]:
+        raise CleanError("所有列的缺失率都超过阈值，已取消操作")
+    out = df.drop(columns=cols)
+    return out, f"删除缺失率超 {threshold:.0%} 的列: {', '.join(map(str, cols)) or '无'}"
+
+
+def unify_boolean_text(df, params):
+    """布尔语义列统一：把 true/false/yes/no/1/0/是/否 等统一为 是/否。"""
+    column = params.get("column", "")
+    if column not in df.columns:
+        raise CleanError(f"列不存在: {column}")
+
+    def _fn(v):
+        if isinstance(v, str):
+            low = v.strip().lower()
+            if low in _TRUE_SET:
+                return "是"
+            if low in _FALSE_SET:
+                return "否"
+        elif isinstance(v, bool):
+            return "是" if v else "否"
+        return v
+
+    out = df.copy()
+    before = out[column]
+    out[column] = before.map(_fn, na_action="ignore")
+    changed = int(before.astype("string").ne(out[column].astype("string")).sum())
+    return out, f"列 [{column}] 布尔语义统一为 是/否（改动 {changed} 个值）"
+
+
+
 
 OPS = {
     "drop_duplicates": drop_duplicates,
@@ -380,6 +662,14 @@ OPS = {
     "log_transform": log_transform,
     "extract_date_parts": extract_date_parts,
     "regex_extract": regex_extract,
+    "trim_whitespace": trim_whitespace,
+    "normalize_text": normalize_text,
+    "parse_number": parse_number,
+    "map_values": map_values,
+    "split_column": split_column,
+    "cap_outliers": cap_outliers,
+    "drop_high_missing": drop_high_missing,
+    "unify_boolean_text": unify_boolean_text,
 }
 
 

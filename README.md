@@ -1,48 +1,37 @@
 # 📊 数据分析小助手（Data Helper）
 
-**本地运行的数据分析工作台**：导入 → 洞察 → 清洗 → SQL / 统计 / 时序 / 业务模板（RFM · 漏斗 · 留存 · 聚类 · A/B）→ AI Agent 辅助分析 → 可视化与报告。**数据全程不出本机**——AI 只看到列结构摘要，分析计算全部在你电脑上完成。
+**本地运行的数据预处理助手**：导入 → 🩺 数据体检（发现明显问题）→ 🔧 一键修复 / 清洗 → 简单可视化 → 导出，把干净数据交给你的主力分析软件。各行各业通用，检查规则只看"数据长什么样"，不预设业务含义。**数据全程不出本机**——AI 只看到列结构摘要。
 
-![CI](https://github.com/tendernessnick/data-helper/actions/workflows/ci.yml/badge.svg) ![tests](https://img.shields.io/badge/tests-176%20passed-brightgreen) ![技术栈](https://img.shields.io/badge/Python-3.12%2B-blue) ![后端](https://img.shields.io/badge/FastAPI%20%2B%20DuckDB%20%2B%20SciPy-green) ![前端](https://img.shields.io/badge/Vue3%20%2B%20ECharts-无构建-orange) ![存储](https://img.shields.io/badge/存储-Parquet%20列存-blueviolet) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
+![CI](https://github.com/tendernessnick/data-helper/actions/workflows/ci.yml/badge.svg) ![tests](https://img.shields.io/badge/tests-198%20passed-brightgreen) ![技术栈](https://img.shields.io/badge/Python-3.12%2B-blue) ![后端](https://img.shields.io/badge/FastAPI%20%2B%20DuckDB%20%2B%20pandas-green) ![前端](https://img.shields.io/badge/Vue3%20%2B%20ECharts-无构建-orange) ![存储](https://img.shields.io/badge/存储-Parquet%20列存-blueviolet) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
 
 ---
 
 ## 🖼️ 真实界面（浏览器实测截图）
 
-| 数据工作台（80 万行真实电商数据） | RFM 客户分层 |
-|---|---|
-| ![工作台](docs/screenshots/workbench.png) | ![RFM](docs/screenshots/rfm.png) |
-
-| 同期群留存热力图 | K-means 聚类（手写 k-means++） |
-|---|---|
-| ![留存](docs/screenshots/cohort.png) | ![聚类](docs/screenshots/cluster.png) |
-
-| 转化漏斗 | K 线与金融分析 |
-|---|---|
-| ![漏斗](docs/screenshots/funnel.png) | ![K线](docs/screenshots/kline.png) |
-
-| AI 分析助手（SSE 流式 + 工具调用） |
+| IDE 式工作台：电子表格式数据表 + 右侧工具栏 + 底部 SQL/Python |
 |---|
-| ![AI](docs/screenshots/ai-chat.png) |
+| ![工作台](docs/screenshots/workbench.png) |
 
-## ⭐ 端到端案例：百万行真实电商数据分析
+**v4.1 界面重设计（v4.3 布局微调）**：主页是极简拖拽导入区；进入数据集后为 IDE 式布局——主区「📋 数据表 / 📊 结果」双 tab（表格占满主区：列头点击排序 ↖↘三态、▾ 下拉按值勾选筛选含缺失∅、冻结表头与行号列）；**右侧工具栏**（🧹清洗 / 📈统计 / 🎯采样 / 🕘历史，可收起为图标栏）；**底部面板**（🗄️SQL 控制台 / 🐍Python 变换，可拖高分隔条、双击复位、可折叠）。体检出结果自动切「结果」tab，问题条目的 🔧 修复按钮自动预填右侧清洗面板。
 
-用本工具对 **UCI Online Retail II**（1,067,371 行真实在线零售交易，CC BY 4.0）完成了一次完整业务分析：
+## ⭐ 端到端案例：百万行真实电商数据预处理
 
-- **92MB CSV 流式上传** → 分块直写 Parquet，2.6 秒完成，内存只驻留单个分块；
-- SQL 清洗出 **805,549 行有效销售**，RFM 分层出 **5,878 名客户 8 个层级**；
-- 发现 **41.3% 的客户贡献 82.08% 收入**、复购率 **72.39%**、头部 10% 客户贡献 **63.9%** 金额；
-- 12 个同期群留存热力矩阵（M1 留存 16%~25%）、生命周期漏斗（首购→复购→高价值整体转化 **24.8%**）、K-means 自动选 k 与四簇画像（鲸鱼/批发/大众/流失）、退货与地理分析（UK 占 83%，Netherlands 户均 £2,217）；
-- 沉淀 4 条可执行的运营建议（详见 **[examples/ecommerce/README.md](examples/ecommerce/README.md)**，全部结果 JSON 在 `examples/ecommerce/results/`）。
+用本工具对 **UCI Online Retail II**（1,067,371 行真实在线零售交易，CC BY 4.0）跑完整预处理流水线：
+
+- **92MB CSV 流式上传 2.9 秒**（分块直写 Parquet）；
+- 一键体检发现 **15 项问题**：34,335 行重复、`Description` 20% 带首尾空格、`StockCode` 混合类型、`Quantity` 2.3 万个负值（退货/取消单）；
+- SQL 一步清洗出 **805,549 行有效销售**，复检对比评分变化；
+- 导出 46.5MB 干净 CSV（详见 **[examples/ecommerce/README.md](examples/ecommerce/README.md)**，结果 JSON 在 `examples/ecommerce/results/`）。
 
 ```bash
 # 复现案例
 .venv/Scripts/python.exe scripts/fetch_dataset.py            # 下载数据（约 43MB）
-.venv/Scripts/python.exe scripts/run_ecommerce_analysis.py   # 一键重跑全部分析
+.venv/Scripts/python.exe scripts/run_ecommerce_analysis.py   # 一键重跑体检→清洗→复检→导出
 ```
 
 ## 🚀 快速开始
 
-**普通用户（exe）**：双击 `数据分析小助手.exe`（单文件免安装）→ 自动打开浏览器 → 点「生成示例数据」立即体验。数据保存在 exe 同目录 `data/`。
+**普通用户（exe）**：双击 `数据分析小助手.exe`（单文件免安装）→ 自动打开浏览器 → 点「生成示例数据」立即体验。数据保存在 exe 同目录 `data/`。完整使用说明见 **[docs/使用手册.md](docs/使用手册.md)**。
 
 **开发者（源码）**：
 
@@ -50,7 +39,7 @@
 python -m venv .venv
 .venv\Scripts\pip install -r requirements-dev.txt
 .venv\Scripts\python run_app.py            # 或 uvicorn backend.app.main:app --port 8765 --reload
-.venv\Scripts\python -m pytest tests/ -q   # 176 项测试
+.venv\Scripts\python -m pytest tests/ -q   # 198 项测试
 ```
 
 ## ✨ 功能一览
@@ -58,19 +47,20 @@ python -m venv .venv
 | 模块 | 能力 |
 |---|---|
 | 📥 数据导入 | CSV / XLSX / JSON / 粘贴（Excel 复制即用）；自动识别编码与分隔符；Excel 多工作表；**>16MB 大 CSV 自动分块流式导入**（20 万行/块直写 Parquet，上限 500MB） |
-| 🔍 一键洞察 | 数据质量评分（0-100 环形 + 扣分明细）+ 本地规则引擎：质量体检、分布形态、类别集中度、月度趋势、环比突变、强相关列对 → 中文要点清单 |
-| 🧹 清洗与列变换 | 去重、缺失 6 式、条件筛选、异常值剔除；重命名、类型转换、分箱、独热编码、标准化、对数、日期成分提取、正则提列；一级撤销 + 回滚原始 + 操作历史 |
-| 📈 统计分析 | 分组聚合、透视表、相关性（Pearson/Spearman/Kendall 卡片内切换）、直方图、箱线图、频次、describe |
-| 📉 时间序列 | 趋势、同比/环比/累计、移动平均、预测（三方法留出回测 MAPE 选优 + 95% 置信区间） |
-| 🎯 业务模板 | **RFM 分层**（五分位 → 8 层）、**转化漏斗**（到达制口径 + 流失明细）、**同期群留存**（月/周粒度 N 期矩阵）、**K-means 聚类**（手写 k-means++ + 多重启 + 肘部法/轮廓系数自动选 k + 簇画像散点）、ABC 帕累托、异常值检测 |
-| 🧪 统计检验 | 正态性（Shapiro-Wilk/Jarque-Bera）、组间比较（Welch t/ANOVA/Mann-Whitney/Kruskal-Wallis + **Cohen's d 效应量**）、**两比例 z 检验（A/B 转化：差值 CI + 相对提升）**、**样本量计算器**（α/power/基线/MDE → 每组 n）、卡方（Cramér's V）、相关显著性 |
-| 🗄️ SQL 控制台 | DuckDB 引擎，数据集注册 `ds1/ds2…`+`df`；**直接注册 Parquet 视图惰性读取**（不整表载入内存）；只读防护；结果可存为新数据集（不截断） |
-| 🔌 MCP 服务端（可选） | **外接现成聊天界面**：Cherry Studio / ChatWise 等客户端填你自己的 API Key，把本软件添加为 MCP 工具源，客户端里的 AI 直接调用 15 个本地分析工具（数据集浏览/SQL/RFM/漏斗/留存/聚类/A-B/预测）——LLM 在客户端、数据在本机（[docs/MCP.md](docs/MCP.md)） |
-| 🤖 AI Agent（可选） | **SSE 流式对话**（逐字渲染 + 停止按钮）；**function calling 工具循环**：12 个分析工具（RFM/漏斗/留存/聚类/A-B/预测/SQL 式聚合…）以 JSON Schema 注册，LLM 出意图、后端在本地 DataFrame 真实执行、结果卡自动回填；内存级会话历史 + schema 注入；端点不支持 tools 自动回退纯文本。**只有列结构摘要离开本机** |
-| 📡 在线行情 / 💰 金融分析 | akshare（东财主源+新浪降级）；收益风险指标（年化/回撤/Sharpe/VaR…）、K 线（MA+成交量+缩放）、8 类技术指标、CAPM 基准对比、组合有效前沿、ADF/Ljung-Box |
-| ⚖️ 对比与采样 | 数据集对比（列/类型/统计差异/键匹配）+ 随机/分层采样 |
-| 🐍 Python 变换 | 直接写 pandas 代码，先预览后应用，30 秒超时保护 |
-| 📤 导出 / 📄 报告 | 卡片与数据集导出 CSV/Excel；一键自包含 HTML 分析报告 |
+| 🩺 数据体检 | **一键体检（纯本地规则引擎，行业无关）**：质量评分 0-100 + **六维质量雷达**（完整性/唯一性/一致性/有效性/及时性/结构）+ 结构化问题清单（🔴严重/🟡警告/🔵提示），每条带证据样本；检查覆盖 **结构**（重复行/重复列名/常量列/空列/ID 列键重复）、**缺失**（整体与列级/空串≠缺失）、**类型**（文本数字/混合类型/带格式数字 `1,234`·`¥100`·`12%`·`1.5万`·全角数字/日期文本/混合日期格式/手机号·邮箱·网址·身份证格式违反/长度异常）、**文本脏污**（首尾空格含全角/控制与零宽字符/连续空格）、**类别一致性**（同义标签/布尔语义不统一）、**数值合理性**（离群/负值/高零占比/小数位异常/量级断裂疑单位混用）、**日期合理性**（未来日期/超远历史/重复时间戳/时间覆盖缺口）、**列间一致性**（算术关系 `数量×单价≈金额` 违反行/函数依赖冲突"同订单号不同客户"） |
+| 🔧 一键修复 | 体检问题条目带**修复按钮**：点击自动预填清洗面板参数（如发现重复→预填去重、同义标签→预填值映射、带格式数字→预填智能数值解析），确认后执行 |
+| 🧹 清洗与列变换 | **22 种操作**：行级（去重/删缺失/填充 7 式含时序插值/条件筛选 12 操作符/异常值剔除/**盖帽不删行**）；文本与格式（**去首尾空格/规范化（全角转半角+去控制字符+压缩空格）/智能数值解析/值映射/拆分列/布尔统一**）；列级（重命名/删除/按缺失率删列/类型转换/分箱/独热/标准化/对数/日期成分/正则提取）；连续多级撤销 + 回滚原始 + 操作历史 |
+| 🗂 项目化管理 | 数据集按项目分组（新建/重命名/删除/折叠）；导入时选目标项目；**采样、SQL 建集、工作表导入的派生表自动留在源表所在项目**并带 ↳ 溯源标记；随时移动数据集到其他项目 |
+| ⏪ 多步回溯 | 每次清洗/变换前自动保存版本快照（硬链接零拷贝，最多 20 份）；历史面板任意一步「回到这步」；**回错可再跳回**（分支保留，做新操作才丢弃未走分支）；回滚原始 = 秒回 v0 |
+| 🐍 Python 变换 | 直接写 pandas 代码，**先预览后应用**（快照重放防错版），30 秒超时保护 |
+| 📊 快速统计与图表 | 分组聚合、相关性（Pearson/Spearman/Kendall 卡片内切换）、直方图、箱线图、频次、describe、时间趋势、异常值检测；**深度画像**：缺失矩阵热力图、重复行明细、两列散点、文本长度统计 |
+| 🗄️ SQL 控制台 | DuckDB 引擎，数据集注册 `ds1/ds2…`+`df`；**直接注册 Parquet 视图惰性读取**；只读防护；结果可存为新数据集（不截断） |
+| 🤖 AI Agent（可选，后端保留） | 后端 function calling 工具循环完整保留（体检/汇总/分组/趋势/相关/直方图/频次），**应用内对话界面已在 v4.1 移除**，推荐经 🔌 MCP 外接客户端使用；后续想恢复只需加回 UI |
+| 🔌 MCP 服务端（可选） | **外接现成聊天界面**：Cherry Studio / ChatWise 等客户端填你自己的 API Key，把本软件添加为 MCP 工具源，10 个只读工具（数据集浏览/体检/SQL/统计摘要）——LLM 在客户端、数据在本机（[docs/MCP.md](docs/MCP.md)） |
+| 🎯 采样 | 随机 / 分层 / 前 N 行，结果另存新数据集 |
+| 📤 导出 | 数据集与结果卡导出 CSV / Excel |
+
+**v4.0 说明**：本版本聚焦预处理助手定位，移除了 v3 的业务模板（RFM/漏斗/留存/聚类）、统计检验、时序预测、金融分析与在线行情等复杂分析功能——这些交给专业分析软件更合适。**v4.1** 重设计了前端交互（IDE 式工作台，见上方界面说明）并移除了应用内 AI 对话界面（后端能力保留）。**v4.2** 新增数据集项目化管理与多步回溯。
 
 ## 🏗️ 架构
 
@@ -82,33 +72,25 @@ python -m venv .venv
 ┌──────────────────────────────┴───────────────────────────────────┐
 │  FastAPI（backend/app）                                            │
 │  api.py 路由层 · agent.py 工具循环 · sqlquery.py 只读防护            │
-│  ┌────────── 分析引擎（全本地）───────────────────────────────┐    │
-│  │ analysis 13种 · biz(RFM/漏斗/留存/手写K-means)             │    │
-│  │ stats_tests(SciPy) · forecast · finance · deepprofile     │    │
-│  └───────────────────────────────────────────────────────────┘    │
-│  storage.py：Parquet 列存（原子写/自动迁移）+ 元信息/撤销快照         │
+│  ┌────────── 体检与清洗引擎（全本地）──────────────────────────┐    │
+│  │ insights(体检规则引擎) · cleaning(22 op) · transform       │    │
+│  │ analysis(快速统计) · deepprofile(深度画像) · suggest      │    │
+│  └──────────────────────────────────────────────────────────┘    │
+│  storage.py：Parquet 列存（原子写/自动迁移）+ 项目注册表/版本快照      │
 └──────────────────────────────┬───────────────────────────────────┘
                                │
         data/datasets/{id}/ ├─ original.*      原始上传文件
                             ├─ current.parquet 工作副本（列存压缩）
-                            ├─ prev.parquet    撤销快照
-                            └─ meta.json       行列/类型/操作历史
+                            ├─ versions/v{n}   版本快照（硬链接零拷贝，多步回溯）
+                            └─ meta.json       行列/类型/项目归属/版本号/操作历史
+        data/projects.json    项目注册表
 ```
 
-**性能设计**：大 CSV 分块流式读取直接写 Parquet（不整表进内存）；SQL 通过 DuckDB 视图惰性读 Parquet，聚合下推到列存引擎；RFM/漏斗/留存均在 pandas 向量化完成。百万行级 CSV 上传 2.6 秒（i5 笔记本实测），千万行级在 16GB 内存机器可处理。
+**性能设计**：大 CSV 分块流式读取直接写 Parquet（不整表进内存）；SQL 通过 DuckDB 视图惰性读 Parquet；体检的逐值扫描（数值/日期解析）在采样上执行并全列向量化正则，百万行秒级完成。
 
-## 🤖 AI Agent 工作方式（可选）
+## 🤖 AI 能力的现状（可选）
 
-在「连接设置」填 OpenAI 兼容接口（智谱 GLM / DeepSeek / OpenAI 等，仅存本机 `data/config.json`）。不配置时其余功能完全不受影响。
-
-```
-你: 帮我给这个数据集做 RFM 分层
-  ⏳ 正在执行 RFM 客户分层…          ← 工具进度（SSE tool_start）
-  ✅ 已完成「RFM 客户分层」，结果卡已加入数据页
-AI: 5878 名客户分为 8 层，重要价值客户 2,425 人贡献 82.08% 收入…   ← 逐字流式
-```
-
-LLM 通过 function calling 发起分析意图 → 后端在本地 DataFrame 上真实执行 → 统计结果回填给 LLM 解读、结果卡回填到数据页画布。**原始数据永不离开本机**。
+v4.1 起应用内对话界面已移除，但**后端 AI 能力完整保留**（`/api/ai/*` 路由、agent 工具循环、OpenAI 兼容配置接口），后续恢复只需加回 UI。当前推荐用法是 **MCP 外接**：顶栏「🔌 MCP」按钮复制地址，到 Cherry Studio / ChatWise 等客户端填你自己的 API Key 添加为工具源，即可在客户端里对话式体检与查询（配置步骤见 [docs/MCP.md](docs/MCP.md)）。LLM 只能看到列结构摘要与查询结果，**原始数据永不离开本机**。
 
 ## 📁 目录结构
 
@@ -116,43 +98,44 @@ LLM 通过 function calling 发起分析意图 → 后端在本地 DataFrame 上
 data_helper/
 ├── backend/app/
 │   ├── api.py            # 全部 HTTP 路由（含 SSE 端点）
+│   ├── insights.py       # 数据体检：规则引擎 + 质量评分 + 修复建议
+│   ├── cleaning.py       # 22 种清洗操作（含文本格式清洗）
 │   ├── agent.py          # AI Agent：工具注册表 + function calling 循环
 │   ├── ai.py             # LLM 配置/调用（OpenAI 兼容，掩码不回传）
 │   ├── storage.py        # Parquet 存储 + 大 CSV 流式建集 + pickle 自动迁移
 │   ├── sqlquery.py       # DuckDB SQL（Parquet 视图 + 只读防护）
-│   ├── biz.py            # 漏斗 / 同期群留存 / 手写 K-means(k-means++)
-│   ├── stats_tests.py    # 检验套件（含两比例 z + 样量计算 + Cohen's d）
-│   ├── analysis.py / forecast.py / finance.py / datafeed.py / ...
+│   ├── analysis.py / deepprofile.py / suggest.py / transform.py / ...
 │   └── logutil.py        # 控制台 + 滚动文件日志
 ├── frontend/             # 无构建前端（Vue3 + ECharts 本地 vendor）
 ├── scripts/
 │   ├── fetch_dataset.py          # 下载 UCI Online Retail II → CSV
-│   └── run_ecommerce_analysis.py # 端到端案例一键复跑
-├── examples/ecommerce/   # 百万行电商分析叙事 + 全部结果 JSON
+│   └── run_ecommerce_analysis.py # 端到端预处理案例一键复跑
+├── examples/ecommerce/   # 百万行预处理叙事 + 全部结果 JSON
 ├── docs/FEATURES.md      # 完整功能清单（模块化，含审计验收基准）
-├── docs/screenshots/     # 真实界面截图
-├── tests/                # 176 项 pytest
+├── docs/使用手册.md       # 面向普通用户的使用手册
+├── tests/                # 198 项 pytest
 └── .github/workflows/ci.yml  # ruff + pytest（Python 3.12/3.14）
 ```
 
 ## 📦 构建 exe
 
 ```bash
-.venv\Scripts\python -m PyInstaller --noconfirm --onefile --name "数据分析小助手" --add-data "frontend;frontend" --collect-submodules akshare --collect-data akshare --collect-data py_mini_racer run_app.py
+.venv\Scripts\python -m PyInstaller --noconfirm --onefile --name "数据分析小助手" --add-data "frontend;frontend" run_app.py
 ```
 
-产物 `dist/数据分析小助手.exe`（约 103MB）。`--collect-data` 两个参数不可省（akshare 日历数据 / py_mini_racer 原生库）。
+产物 `dist/数据分析小助手.exe`。
 
 ## 🧪 测试与质量
 
-**176 项 pytest 全绿**：上传解析（含 GBK/JSON/XLSX/流式大文件/类型漂移回退）、Parquet 存储与 pickle 自动迁移、SQL（含建集不截断回归）、漏斗/留存/聚类业务模板、统计检验与 A/B 套件、AI Agent（mock LLM：工具循环/错误回填/降级回退/会话历史/SSE 协议）、金融、预测、报告导出等。`ruff` 零告警；CI 在 Python 3.12 / 3.14 双版本跑 lint + tests。
+**198 项 pytest 全绿**：上传解析（含 GBK/JSON/XLSX/流式大文件/类型漂移回退）、Parquet 存储与迁移、SQL（含建集不截断回归）、**体检规则逐条命中/干净数据放行/一键修复可执行契约**、**8 个新清洗操作正反例**、AI Agent（mock LLM：工具循环/错误回填/降级回退/会话历史/SSE 协议）、MCP 协议等。`ruff` 零告警；CI 在 Python 3.12 / 3.14 双版本跑 lint + tests。
 
 ## ⚠️ 说明与边界
 
-- **规模定位**：百万行为主战场；千万行级依赖列宽与内存，建议配合内置采样使用。
+- **规模定位**：百万行为主战场；千万行级依赖列宽与内存，建议配合采样使用。
 - **数据安全**：默认全本地。AI 开启后仅发送**列结构摘要**（列名/类型/统计量，不含明细行）；API Key 掩码存储不回传。
 - **SQL 只读**：仅允许 SELECT/WITH，分号拼接逐段校验；预览超 10 万行截断展示（建集不截断）。
-- 撤销为一级撤销；更早状态用「回滚原始数据」。
+- **体检是建议不是判决**：重复行、离群值等发现需结合业务判断（如零售流水同单同品多行属正常），一键修复前请确认参数。
+- 撤销支持连续多级（每次操作前都有版本快照）；历史面板可跳回任意一步，回错还能再跳回来；快照最多保留 20 份，超出淘汰最旧。
 - Python 变换以当前用户权限执行（本地单人工具取舍）。
 
 ## 🎨 设计语言
@@ -161,7 +144,7 @@ data_helper/
 
 ## 🙏 思路参考
 
-[ydata-profiling](https://github.com/ydataai/ydata-profiling) · [DuckDB](https://duckdb.org/docs/lts/guides/python/sql_on_pandas.html) · [Tableau Workspace / Show Me](https://help.tableau.com/current/pro/desktop/en-us/environment_workspace.htm) · [Hex](https://learn.hex.tech/docs/explore-data/projects/projects-introduction)
+[ydata-profiling](https://github.com/ydataai/ydata-profiling) · [DuckDB](https://duckdb.org/docs/lts/guides/python/sql_on_pandas.html) · [OpenRefine（文本清洗）](https://openrefine.org/) · [Tableau Show Me](https://help.tableau.com/current/pro/desktop/en-us/environment_workspace.htm)
 
 ## 📄 License
 

@@ -5,13 +5,12 @@
 
 - 懒加载 mcp 依赖：未安装时其余功能不受影响（挂载返回 None）
 - 传输：Streamable HTTP（/mcp/mcp）与 SSE（/sse/sse，兼容旧客户端）
-- 工具全部只读（分析 + SELECT-only SQL），与 SQL 控制台同级别防护
+- 工具全部只读（体检 + 分析 + SELECT-only SQL），与 SQL 控制台同级别防护
 """
 import json
 import logging
 
-from . import analysis, biz, sqlquery, stats_tests, storage
-from . import forecast as forecast_mod
+from . import analysis, insights, sqlquery, storage
 from .profile import profile_columns
 from .serialize import cell
 
@@ -21,7 +20,7 @@ MAX_ROWS = 200  # 工具返回给 LLM 的行数上限（防上下文爆炸）
 
 MCP_INSTRUCTIONS = (
     "这是本地数据分析工具集。请先调用 list_datasets 查看可用数据集，"
-    "再用 column_profile 了解列结构（列名/类型/统计量），然后按需调用分析工具。"
+    "再用 column_profile 了解列结构（列名/类型/统计量），然后按需调用体检与分析工具。"
     "列名必须与 column_profile 返回的完全一致。计算结论请引用工具返回的数字。"
 )
 
@@ -110,6 +109,13 @@ def _analyze(dataset_id: str, kind: str, params: dict) -> str:
     return _dumps(_cap_rows(result))
 
 
+def tool_health_check(dataset_id: str) -> str:
+    """数据体检：质量评分 + 结构化问题清单（每条含级别/列/样本证据与修复建议）。"""
+    df = storage.load_df(dataset_id)
+    result = insights.run_insights(df, {"name": "体检"})
+    return _dumps(result)
+
+
 def tool_describe(dataset_id: str) -> str:
     return _analyze(dataset_id, "describe", {})
 
@@ -130,55 +136,6 @@ def tool_trend(dataset_id: str, date_column: str, value_column: str, freq: str =
     return _analyze(dataset_id, "trend", {"date_column": date_column, "value_column": value_column, "freq": freq})
 
 
-def tool_rfm(dataset_id: str, id_column: str, date_column: str, value_column: str) -> str:
-    return _analyze(dataset_id, "rfm", {"id_column": id_column, "date_column": date_column, "value_column": value_column})
-
-
-def tool_funnel(dataset_id: str, user_column: str, event_column: str, steps: list[str]) -> str:
-    df = storage.load_df(dataset_id)
-    return _dumps(_cap_rows(biz.funnel(df, {
-        "user_column": user_column, "event_column": event_column, "steps": steps,
-    })))
-
-
-def tool_cohort(dataset_id: str, user_column: str, date_column: str, freq: str = "M", periods: int = 8) -> str:
-    df = storage.load_df(dataset_id)
-    return _dumps(_cap_rows(biz.cohort(df, {
-        "user_column": user_column, "date_column": date_column, "freq": freq, "periods": periods,
-    })))
-
-
-def tool_cluster(dataset_id: str, columns: list[str], k: int = 0) -> str:
-    df = storage.load_df(dataset_id)
-    result = biz.cluster(df, {"columns": columns, "k": int(k)})
-    result.pop("cluster_points", None)  # 散点原始数据对 LLM 无用且巨大
-    return _dumps(_cap_rows(result))
-
-
-def tool_ab_prop_test(dataset_id: str = "", group_column: str = "", success_column: str = "",
-                      success_value: str = "", success_a: float | None = None, n_a: float | None = None,
-                      success_b: float | None = None, n_b: float | None = None) -> str:
-    if success_a is not None and n_a is not None:
-        result = stats_tests.prop_z_test(None, {
-            "success_a": success_a, "n_a": n_a, "success_b": success_b, "n_b": n_b,
-        })
-    else:
-        df = storage.load_df(dataset_id) if dataset_id else None
-        result = stats_tests.prop_z_test(df, {
-            "group_column": group_column, "success_column": success_column, "success_value": success_value,
-        })
-    return _dumps(result)
-
-
-def tool_forecast(dataset_id: str, date_column: str, value_column: str,
-                  horizon: int = 6, freq: str = "M") -> str:
-    df = storage.load_df(dataset_id)
-    return _dumps(_cap_rows(forecast_mod.forecast(df, {
-        "date_column": date_column, "value_column": value_column,
-        "horizon": horizon, "freq": freq,
-    }), max_rows=60))
-
-
 # ---------------- 服务器构建与挂载 ----------------
 
 
@@ -189,7 +146,7 @@ def build_server():
     s = MCPServer(
         name="data-helper",
         title="数据分析小助手",
-        description="本地数据分析工具集：数据集浏览 / SQL / RFM / 漏斗 / 留存 / 聚类 / A-B / 预测",
+        description="本地数据体检与预处理工具集：数据集浏览 / 数据体检 / SQL / 统计摘要",
         instructions=MCP_INSTRUCTIONS,
     )
 
@@ -201,6 +158,8 @@ def build_server():
                description="分页预览数据集原始行（page/page_size）。")
     s.add_tool(tool_sql_query, name="sql_query",
                description="只读 SQL 查询（DuckDB 方言，仅 SELECT/WITH）。数据集别名 ds1/ds2…，指定 dataset_id 时亦可用 df；支持 JOIN/窗口函数。")
+    s.add_tool(tool_health_check, name="health_check",
+               description="数据体检：质量评分（0-100）+ 结构化问题清单（缺失/重复/类型混乱/格式脏污/异常值/日期问题等）。用户问数据质量或怎么清洗时优先调用。")
     s.add_tool(tool_describe, name="describe", description="数值列汇总统计（count/mean/std/分位数）。")
     s.add_tool(tool_groupby, name="groupby",
                description="分组聚合。metrics=[{column,agg}]，agg 可选 sum/mean/count/min/max/median/std/nunique；top 限制返回组数。")
@@ -208,18 +167,6 @@ def build_server():
                description="数值列相关矩阵。method 可选 pearson/spearman/kendall。")
     s.add_tool(tool_value_counts, name="value_counts", description="类别列取值频次 Top N。")
     s.add_tool(tool_trend, name="trend", description="时间趋势。freq 可选 D/W/M/Q/Y。")
-    s.add_tool(tool_rfm, name="rfm",
-               description="RFM 客户分层：id_column=客户列，date_column=日期列，value_column=金额列；输出 8 层分层与金额占比。")
-    s.add_tool(tool_funnel, name="funnel",
-               description="转化漏斗（到达制口径）：user_column=用户列，event_column=事件列，steps=有序事件值列表（≥2 步）。")
-    s.add_tool(tool_cohort, name="cohort",
-               description="同期群留存矩阵：按首次活跃分群。freq 可选 M/W；periods=观察期数(2-12)。")
-    s.add_tool(tool_cluster, name="cluster",
-               description="K-means 聚类（自动选 k）：columns=≥2 个数值列；k=0 自动推荐。输出各簇画像与轮廓系数。")
-    s.add_tool(tool_ab_prop_test, name="ab_prop_test",
-               description="A/B 两比例 z 检验。数据集模式：group_column+success_column+success_value；或直接计数：success_a/n_a/success_b/n_b。输出 p 值、差值 CI 与相对提升。")
-    s.add_tool(tool_forecast, name="forecast",
-               description="时序预测：三方法（线性/Holt/季节朴素）回测选优，输出未来 horizon 期点值与区间。")
 
     import asyncio as _a
 

@@ -55,7 +55,8 @@ def test_save_and_undo_uses_parquet_snapshot():
     df2 = pd.DataFrame({"a": [1, 2, 3]})
     storage.save_df(ds, df2, "测试修改")
     d = storage.DATASETS_DIR / ds
-    assert (d / "prev.parquet").exists()
+    # 版本快照：操作前状态存为 versions/v0.parquet（取代旧 prev.parquet 单快照）
+    assert (d / "versions" / "v0.parquet").exists()
     assert len(storage.load_df(ds)) == 3
     meta = storage.undo_dataset(ds)
     assert meta["rows"] == 2
