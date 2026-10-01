@@ -33,7 +33,7 @@
 
 **普通用户（exe）**：双击 `数据分析小助手.exe`（单文件免安装）→ 自动打开浏览器 → 点「生成示例数据」立即体验。数据保存在 exe 同目录 `data/`。完整使用说明见 **[docs/使用手册.md](docs/使用手册.md)**。
 
-**在线版（web）**：`webview` 分支提供 Dockerfile，可一键部署到腾讯云 CloudBase 云托管（容器型，支持从 GitHub 仓库自动构建），浏览器直接访问，无需安装。步骤与注意事项见 **[docs/DEPLOY_CLOUDBASE.md](docs/DEPLOY_CLOUDBASE.md)**。
+**在线版（web）**：master 分支提供 Dockerfile，可一键部署到腾讯云 CloudBase 云托管（容器型，支持从 GitHub 仓库自动构建），浏览器直接访问，无需安装。步骤与注意事项见 **[docs/DEPLOY_CLOUDBASE.md](docs/DEPLOY_CLOUDBASE.md)**。
 
 **开发者（源码）**：
 
@@ -63,7 +63,7 @@ python -m venv .venv
 | 🎯 采样 | 随机 / 分层 / 前 N 行，结果另存新数据集 |
 | 📤 导出 | 数据集与结果卡导出 CSV / Excel |
 
-**v4.0 说明**：本版本聚焦预处理助手定位，移除了 v3 的业务模板（RFM/漏斗/留存/聚类）、统计检验、时序预测、金融分析与在线行情等复杂分析功能——这些交给专业分析软件更合适。**v4.1** 重设计了前端交互（IDE 式工作台，见上方界面说明）并移除了应用内 AI 对话界面（后端能力保留）。**v4.2** 新增数据集项目化管理与多步回溯。**v4.4** 体检深化（列间一致性检测、六维质量雷达，见上表），并清退 v4.0 起停用模块的遗留代码；`webview` 分支提供 Dockerfile，支持部署到腾讯云 CloudBase 云托管（[docs/DEPLOY_CLOUDBASE.md](docs/DEPLOY_CLOUDBASE.md)）。
+**v4.0 说明**：本版本聚焦预处理助手定位，移除了 v3 的业务模板（RFM/漏斗/留存/聚类）、统计检验、时序预测、金融分析与在线行情等复杂分析功能——这些交给专业分析软件更合适。**v4.1** 重设计了前端交互（IDE 式工作台，见上方界面说明）并移除了应用内 AI 对话界面（后端能力保留）。**v4.2** 新增数据集项目化管理与多步回溯。**v4.4** 体检深化（列间一致性检测、六维质量雷达，见上表），并清退 v4.0 起停用模块的遗留代码；master 分支提供 Dockerfile，支持部署到腾讯云 CloudBase 云托管（[docs/DEPLOY_CLOUDBASE.md](docs/DEPLOY_CLOUDBASE.md)）。
 
 ## 🏗️ 架构
 
@@ -116,7 +116,7 @@ data_helper/
 ├── examples/ecommerce/   # 百万行预处理叙事 + 全部结果 JSON
 ├── docs/FEATURES.md      # 完整功能清单（模块化，含审计验收基准）
 ├── docs/使用手册.md       # 面向普通用户的使用手册
-├── docs/DEPLOY_CLOUDBASE.md # CloudBase 云托管部署指南（webview 分支，Docker）
+├── docs/DEPLOY_CLOUDBASE.md # CloudBase 云托管部署指南（master 分支，Docker）
 ├── Dockerfile            # 云托管容器镜像（监听平台注入的 PORT）
 ├── tests/                # 210 项 pytest
 └── .github/workflows/ci.yml  # ruff + pytest（Python 3.12/3.14）

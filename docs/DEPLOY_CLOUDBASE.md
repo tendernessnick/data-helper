@@ -1,4 +1,4 @@
-# CloudBase 云托管部署指南（webview 分支）
+# CloudBase 云托管部署指南（master 分支）
 
 本项目可完整部署到腾讯云 CloudBase **云托管（CloudRun，容器型）**，部署后浏览器直接访问，无需安装。本文说明可行性依据、部署步骤、与个人主页的链接协同，以及必须知道的边界。
 
@@ -14,10 +14,10 @@
 
 ## 部署步骤（GitHub 来源，推荐）
 
-> 前置：webview 分支已推送到 GitHub（`git push -u origin webview`）。
+> 前置：代码已推送到 GitHub master 分支（`git push origin master`）。
 
 1. 打开 [CloudBase 控制台](https://tcb.cloud.tencent.com)，选择环境 → **云托管** → **创建服务**。
-2. 代码上传方式选择 **代码仓库**，按提示授权并绑定 GitHub 账号，选择仓库 `tendernessnick/data-helper`、分支 `webview`。
+2. 代码上传方式选择 **代码仓库**，按提示授权并绑定 GitHub 账号，选择仓库 `tendernessnick/data-helper`、分支 `master`。
 3. 构建方式选 **容器**，平台自动识别仓库根目录的 `Dockerfile`（无需额外配置文件）。
 4. 关键配置：
    - **监听端口**：本地开发端口填 8080（容器会优先读平台注入的 `PORT`，Dockerfile 已处理，此处仅为兜底）；
@@ -27,7 +27,7 @@
 5. （可选）健康检查路径填 `/api/health`，应用返回 `{"ok": true}`。
 6. 点击部署，等待构建完成，获得形如 `https://<服务名>-<环境ID>.*.tcloudbase.com/` 的访问地址。
 
-之后每次 `git push` 到 webview 分支，云托管可配置自动重新构建部署（服务设置里开启）。
+之后每次 `git push` 到 master 分支，云托管可配置自动重新构建部署（服务设置里开启）。
 
 ## 环境变量
 
