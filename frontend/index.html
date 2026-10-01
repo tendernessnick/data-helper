@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>数据分析小助手</title>
-<link rel="stylesheet" href="/css/style.css?v=418">
+<link rel="stylesheet" href="/css/style.css?v=419">
 </head>
 <body>
 <div id="app" v-cloak :class="{'drag-over': dragOver}">
@@ -99,10 +99,11 @@
         </template>
       </div>
 
-      <!-- 主区 tab：数据表 / 结果 -->
+      <!-- 主区 tab：数据表 / 结果 / 看板 -->
       <div class="main-tabs">
         <button :class="{on: mainTab === 'table'}" @click="mainTab = 'table'">📋 数据表</button>
         <button :class="{on: mainTab === 'cards'}" @click="mainTab = 'cards'">📊 结果<template v-if="cards.length">（{{ cards.length }}）</template></button>
+        <button :class="{on: mainTab === 'dash'}" @click="mainTab = 'dash'">📌 看板<template v-if="dashCount">（{{ dashCount }}）</template></button>
         <div class="main-tabs-right" v-if="mainTab === 'table' && hasViewFilters">
           <span class="filter-chip" v-for="(vals, col) in colFilters" :key="col">
             {{ col }}：{{ vals.length }} 项 <button class="fc-x" title="清除该列筛选" @click="clearColFilter(col)">✕</button>
@@ -173,6 +174,9 @@
                   <span class="card-time"> {{ card.time }}</span>
                 </div>
                 <div style="display:flex;align-items:center;gap:8px">
+                  <button class="btn sm ghost pin-btn" v-if="card._ana" :class="{on: card.pinned}"
+                          :title="card.pinned ? '已在看板中，点击取消钉选' : '钉到看板'"
+                          @click="card.pinned ? unpinCard(card) : pinCard(card)">📌 {{ card.pinned ? '已钉' : '钉看板' }}</button>
                   <div class="segmented" v-if="card.chartDiv && card.type === 'table' && isGenericChart(card)">
                     <button v-for="ct in chartTypes" :key="ct.v" :class="{on: card.chartType === ct.v}"
                             @click="card.chartType = ct.v; renderCardChart(card)">{{ ct.l }}</button>
@@ -290,6 +294,19 @@
                   </template>
                 </template>
 
+                <!-- KPI 指标卡（运营看板） -->
+                <template v-else-if="card.type === 'kpi'">
+                  <div class="kpi-wrap">
+                    <div class="kpi-value">{{ fmtKpi(card.payload.value) }}</div>
+                    <div class="kpi-label">{{ card.payload.agg === 'count' ? '总行数' : card.payload.column + ' · ' + kpiAggLabel(card.payload.agg) }}</div>
+                    <div class="kpi-delta" v-if="card.payload.delta_pct !== null && card.payload.delta_pct !== undefined">
+                      <span :class="card.payload.delta_pct >= 0 ? 'up' : 'down'">{{ card.payload.delta_pct >= 0 ? '▲' : '▼' }} {{ Math.abs(card.payload.delta_pct) }}%</span>
+                      <span class="kpi-prev" v-if="card.payload.prev !== null && card.payload.prev !== undefined">上期 {{ fmtKpi(card.payload.prev) }}</span>
+                    </div>
+                    <div class="kpi-note" v-if="card.payload.span_note">{{ card.payload.span_note }}</div>
+                  </div>
+                </template>
+
                 <!-- 通用表格/图表卡 -->
                 <template v-else>
                   <div class="result-note" style="margin:0 0 8px" v-if="card.payload.note">{{ card.payload.note }}</div>
@@ -319,6 +336,78 @@
             📊 结果画布<br>
             点上方 <b>🩺 数据体检</b> 找出数据问题 · 用右侧<b>工具栏</b>清洗与统计、底部 <b>SQL / Python</b> 加工<br>
             每次操作生成一张卡片，可同时对比多张结果
+          </div>
+        </div>
+
+        <!-- 运营看板：结果页钉选的卡片固化展示（配置存后端，刷新/重启自动重建） -->
+        <div class="dash-scroll" v-show="mainTab === 'dash'">
+          <div class="dash-bar">
+            <span class="hint">看板来自「结果」页卡片右上角的 📌 钉选；数据更新后重进看板即展示最新值</span>
+            <div style="display:flex;gap:8px">
+              <button class="btn sm" @click="refreshDash" :disabled="busy || dashLoading">↻ 刷新数据</button>
+              <button class="btn sm primary" v-if="dashCards.length" @click="toggleShowMode" title="隐藏侧栏，全屏展示看板（Esc 退出）">🖥 放映</button>
+            </div>
+          </div>
+          <div class="dash-grid" v-if="dashCards.length">
+            <div class="card-item" v-for="card in dashCards" :key="card.id" :class="{'span-2': card.span2, 'kpi': card.type === 'kpi'}">
+              <div class="card-head">
+                <div><b>{{ card.icon }} {{ card.title }}</b><span class="card-time"> {{ card.time }}</span></div>
+                <div style="display:flex;align-items:center;gap:8px">
+                  <button class="card-close" title="从看板移除" @click="unpinCard(card)">📌✕</button>
+                </div>
+              </div>
+              <div class="card-body">
+                <template v-if="card.type === 'kpi'">
+                  <div class="kpi-wrap">
+                    <div class="kpi-value">{{ fmtKpi(card.payload.value) }}</div>
+                    <div class="kpi-label">{{ card.payload.agg === 'count' ? '总行数' : card.payload.column + ' · ' + kpiAggLabel(card.payload.agg) }}</div>
+                    <div class="kpi-delta" v-if="card.payload.delta_pct !== null && card.payload.delta_pct !== undefined">
+                      <span :class="card.payload.delta_pct >= 0 ? 'up' : 'down'">{{ card.payload.delta_pct >= 0 ? '▲' : '▼' }} {{ Math.abs(card.payload.delta_pct) }}%</span>
+                      <span class="kpi-prev" v-if="card.payload.prev !== null && card.payload.prev !== undefined">上期 {{ fmtKpi(card.payload.prev) }}</span>
+                    </div>
+                    <div class="kpi-note" v-if="card.payload.span_note">{{ card.payload.span_note }}</div>
+                  </div>
+                </template>
+                <template v-else-if="card.type === 'insight'">
+                  <div class="score-wrap" v-if="card.payload.quality_score">
+                    <div class="score-ring">
+                      <svg width="92" height="92">
+                        <circle cx="46" cy="46" r="40" fill="none" :stroke="ringTrack" stroke-width="8"/>
+                        <circle cx="46" cy="46" r="40" fill="none" :stroke="card.payload.quality_score.color"
+                                stroke-width="8" stroke-linecap="round"
+                                :stroke-dasharray="2 * Math.PI * 40"
+                                :stroke-dashoffset="2 * Math.PI * 40 * (1 - card.payload.quality_score.score / 100)"/>
+                      </svg>
+                      <div class="score-num"><b>{{ card.payload.quality_score.score }}</b><span>质量评分</span></div>
+                    </div>
+                    <div class="score-desc">
+                      <b>{{ card.payload.quality_score.level }}</b> · {{ card.payload.quality_score.note }}
+                      <div class="radar-box" v-if="radarDims(card).length >= 3" :ref="el => setCardRadarEl(card, el)"></div>
+                    </div>
+                  </div>
+                  <div class="hint"><b>{{ (card.payload.findings || []).length }}</b> 项发现 · 详见「结果」页体检卡</div>
+                </template>
+                <template v-else>
+                  <div class="result-note" style="margin:0 0 8px" v-if="card.payload.note">{{ card.payload.note }}</div>
+                  <div class="chart-box" style="height:300px" v-if="card.chartDiv" :ref="el => setCardEl(card, el)"></div>
+                  <div class="table-scroll" style="margin-top:10px;max-height:250px" v-if="card.payload.rows && card.payload.rows.length">
+                    <table class="data">
+                      <thead><tr><th v-for="c in card.payload.columns" :key="c.name">{{ c.name }}</th></tr></thead>
+                      <tbody>
+                        <tr v-for="(r, i) in card.payload.rows.slice(0, 200)" :key="i">
+                          <td v-for="(v, j) in r" :key="j" :class="{num: card.payload.columns[j] && card.payload.columns[j].numeric, null: v === null}">{{ fmtCell(v) }}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </div>
+          <div class="canvas-empty" v-else>
+            📌 看板还是空的<br>
+            到「📊 结果」页点卡片右上角的 <b>📌 钉看板</b>，把体检报告 / KPI 指标 / 转化漏斗 / 图表固定到这里<br>
+            钉选会保存：刷新或重启后自动重建，适合作为日常运营的固定看板
           </div>
         </div>
       </div>
@@ -704,6 +793,8 @@
                   <option value="describe">汇总统计</option>
                   <option value="trend">时间趋势</option>
                   <option value="outliers">异常值检测</option>
+                  <option value="kpi">KPI 指标</option>
+                  <option value="funnel">漏斗分析</option>
                 </select>
             </div>
 
@@ -787,6 +878,55 @@
               </div>
               <div class="field"><label>聚合方式</label>
                 <select v-model="ana.agg"><option v-for="a in aggs" :key="a" :value="a">{{ aggLabel(a) }}</option></select>
+              </div>
+            </div>
+
+            <div v-if="anaKind === 'kpi'" class="form-row">
+              <div class="field"><label>指标列</label>
+                <select v-model="ana.kpiCol">
+                  <option v-for="c in numCols" :key="c.name" :value="c.name">{{ c.name }}</option>
+                </select>
+              </div>
+              <div class="field"><label>聚合方式</label>
+                <select v-model="ana.kpiAgg">
+                  <option value="sum">求和</option><option value="mean">平均</option><option value="count">行数</option>
+                </select>
+              </div>
+              <div class="field" v-if="ana.kpiAgg !== 'count'"><label>日期列（选后附带环比）</label>
+                <select v-model="ana.kpiDate">
+                  <option value="">不对比</option>
+                  <option v-for="c in meta.columns" :key="c.name" :value="c.name">{{ c.name }}（{{ dtypeShort(c.dtype) }}）</option>
+                </select>
+              </div>
+            </div>
+
+            <div v-if="anaKind === 'funnel'">
+              <div class="field"><label>漏斗形态</label>
+                <select v-model="ana.fnMode">
+                  <option value="events">单列步骤（事件日志：一列存步骤名）</option>
+                  <option value="columns">多列标记（每步一列，非空即达成）</option>
+                </select>
+              </div>
+              <template v-if="ana.fnMode === 'events'">
+                <div class="field"><label>步骤列</label>
+                  <select v-model="ana.fnCol">
+                    <option v-for="c in catCols" :key="c.name" :value="c.name">{{ c.name }}</option>
+                  </select>
+                </div>
+                <div class="field"><label>步骤顺序（逗号分隔，与列中取值一致）</label>
+                  <input type="text" v-model="ana.fnSteps" placeholder="如：浏览,加购,下单,支付">
+                </div>
+                <div class="field"><label>用户列（可选，按此列去重）</label>
+                  <select v-model="ana.fnUser">
+                    <option value="">不去重（按行数）</option>
+                    <option v-for="c in meta.columns" :key="c.name" :value="c.name">{{ c.name }}</option>
+                  </select>
+                </div>
+              </template>
+              <div class="field" v-else><label>步骤列（按顺序多选）</label>
+                <select v-model="ana.fnCols" multiple size="4">
+                  <option v-for="c in meta.columns" :key="c.name" :value="c.name">{{ c.name }}</option>
+                </select>
               </div>
             </div>
 
@@ -969,6 +1109,6 @@
 
 <script src="/vendor/echarts.min.js?v=410"></script>
 <script src="/vendor/vue.global.prod.js?v=410"></script>
-<script src="/js/app.js?v=417"></script>
+<script src="/js/app.js?v=419"></script>
 </body>
 </html>

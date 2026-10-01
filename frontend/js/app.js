@@ -68,6 +68,13 @@ const app = createApp({
       // 结果画布
       cards: [],
 
+      // 运营看板（nio 分支）：钉卡配置存后端，进入 tab 时重放重建
+      dashCards: [],
+      dashLoading: false,
+      dashLoaded: false,     // 当前数据集是否已加载过看板（数据变更后置 false 触发重建）
+      dashConfigs: [],       // 服务端配置镜像 [{kind, params, title, icon, span2}]
+      showMode: false,       // 放映模式：隐藏侧栏纯看板展示
+
       // 主题
       theme: "light",
 
@@ -113,6 +120,8 @@ const app = createApp({
         corrCols: [], corrMethod: "pearson", histCol: "", bins: 20, boxCols: [],
         vcCol: "", top: 20, outMethod: "iqr",
         dateCol: "", valCol: "", freq: "M", agg: "sum",
+        kpiCol: "", kpiAgg: "sum", kpiDate: "",
+        fnMode: "events", fnCol: "", fnSteps: "", fnUser: "", fnCols: [],
       },
 
       // SQL 控制台
@@ -153,6 +162,8 @@ const app = createApp({
             if (c.type === "insight") this.renderInsightRadar(c);  // 六维雷达同需补渲
           });
         });
+      } else if (v === "dash") {
+        this.ensureDash();
       }
     },
   },
@@ -198,12 +209,20 @@ const app = createApp({
     catCols() {
       return (this.profile.columns || []).filter((c) => c.kind !== "numeric");
     },
+    dashCount() {
+      return this.dashConfigs.length;
+    },
     anaReady() {
       const a = this.ana, k = this.anaKind;
       if (k === "groupby") return a.by.length && a.metrics.every((m) => m.column);
       if (k === "histogram") return a.histCol;
       if (k === "value_counts") return a.vcCol;
       if (k === "trend") return a.dateCol && a.valCol;
+      if (k === "kpi") return a.kpiAgg === "count" || !!a.kpiCol;
+      if (k === "funnel") {
+        if (a.fnMode === "columns") return a.fnCols.length >= 2;
+        return !!a.fnCol && a.fnSteps.split(/[,，、]/).map((s) => s.trim()).filter(Boolean).length >= 2;
+      }
       return true;
     },
     statusMissing() {
@@ -233,6 +252,10 @@ const app = createApp({
 
     window.addEventListener("resize", () => {
       Object.values(this._charts || {}).forEach((c) => c && c.resize());
+    });
+    // 看板放映模式：Esc 退出
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && this.showMode) this.toggleShowMode();
     });
     // 列头下拉面板：点击面板外关闭
     window.addEventListener("click", (e) => {
@@ -374,7 +397,7 @@ const app = createApp({
 
     isGenericChart(card) {
       const R = card.payload;
-      return !(R.matrix || R.box_stats || R.points || R.heatmap || R.row_labels);
+      return !(R.matrix || R.box_stats || R.points || R.heatmap || R.row_labels || R.kind === "funnel");
     },
 
     moveCard(idx, dir) {
@@ -486,6 +509,26 @@ const app = createApp({
         const T = this.chartTheme();
         const chart = echarts.init(el);
         this._charts[card.id] = chart;
+
+        // 转化漏斗（运营看板）
+        if (R.kind === "funnel") {
+          chart.setOption({
+            tooltip: { trigger: "item", formatter: (p) => {
+              const s = R.steps[p.dataIndex];
+              return s.conv_from_prev === null || s.conv_from_prev === undefined
+                ? `${p.name}：${p.value.toLocaleString()}`
+                : `${p.name}：${p.value.toLocaleString()}（转化 ${s.conv_from_prev}%）`;
+            } },
+            series: [{
+              type: "funnel", sort: "none", gap: 4, left: "8%", width: "84%", top: 12, bottom: 12, minSize: "24%",
+              label: { show: true, position: "inside", color: "#fff", fontSize: 12,
+                formatter: (p) => `${p.name}\n${p.value.toLocaleString()}` },
+              itemStyle: { borderColor: T.split, borderWidth: 1 },
+              data: R.steps.map((s) => ({ name: s.name, value: s.count })),
+            }],
+          });
+          return;
+        }
 
         // 热力图族：交叉表 / 缺失矩阵 / 相关矩阵
         let heat = null;
@@ -721,6 +764,7 @@ const app = createApp({
       this.meta = this.datasets.find((d) => d.id === id) || {};
       this.page = 1;
       this.cards = [];
+      this.resetDash();  // 换数据集：看板配置清空，进入看板 tab 时重新加载
       Object.values(this._charts || {}).forEach((c) => c && c.dispose());
       this._charts = {};
       this.cleanSel.columns = [];
@@ -757,8 +801,9 @@ const app = createApp({
 
     async afterDataChange(respMeta) {
       if (respMeta) this.meta = respMeta;
-      // 数据变了：排序/筛选仍有效，但回到数据表并刷新
+      // 数据变了：排序/筛选仍有效，但回到数据表并刷新；看板置为待重建（下次进入重放最新数据）
       this.mainTab = "table";
+      this.dashLoaded = false;
       await Promise.all([this.loadRows(), this.loadProfile(), this.refreshDatasets(), this.loadVersions()]);
     },
 
@@ -1172,7 +1217,13 @@ const app = createApp({
       else if (k === "value_counts") params = { column: a.vcCol, top: a.top };
       else if (k === "trend") params = { date_column: a.dateCol, value_column: a.valCol, freq: a.freq, agg: a.agg };
       else if (k === "outliers") params = { columns: a.boxCols.length ? a.boxCols : undefined, method: a.outMethod };
-      await this.doAnalyze(k, params, "📈");
+      else if (k === "kpi") params = { value_column: a.kpiCol, agg: a.kpiAgg, date_column: a.kpiAgg === "count" ? "" : a.kpiDate };
+      else if (k === "funnel") {
+        params = a.fnMode === "columns"
+          ? { mode: "columns", columns: a.fnCols }
+          : { mode: "events", column: a.fnCol, steps: a.fnSteps.split(/[,，、]/).map((s) => s.trim()).filter(Boolean), user_column: a.fnUser };
+      }
+      await this.doAnalyze(k, params, k === "kpi" ? "🎯" : (k === "funnel" ? "⏬" : "📈"));
     },
 
     async doAnalyze(kind, params, icon, span2 = false) {
@@ -1183,8 +1234,15 @@ const app = createApp({
           groupby: "分组聚合", corr: "相关性分析", histogram: "直方图",
           boxplot: "箱线图", value_counts: "频次统计", describe: "汇总统计",
           trend: "时间趋势", outliers: "异常值检测",
+          kpi: "KPI 指标", funnel: "转化漏斗",
         };
-        this.addCard({ type: "table", icon, title: titleMap[kind] || kind, payload: R, span2 });
+        const card = this.addCard({ type: kind === "kpi" ? "kpi" : "table", icon, title: titleMap[kind] || kind, payload: R, span2 });
+        card._ana = { kind, params };  // 可重放配置：钉看板时保存
+        if (kind === "funnel") {  // 漏斗无表格行，仅图表（同步置位赶在 addCard 的 nextTick 渲染前）
+          card.chartDiv = true;
+          card.chartType = "funnel";
+        }
+        this.syncResultPins();  // 与看板配置比对，已钉过的组合直接显示「已钉」
       } catch (e) { this.toast(e.message, "error"); }
       finally { this.busy = false; }
     },
@@ -1197,6 +1255,134 @@ const app = createApp({
         card.payload = R;
         this.renderCardChart(card);
       } catch (e) { this.toast(e.message, "error"); }
+    },
+
+    // ---------- 运营看板（钉卡配置存后端，重放重建） ----------
+    async ensureDash() {
+      if (this.dashLoaded) {
+        this.$nextTick(() => this.dashCards.forEach((c) => {
+          if (c.chartDiv) this.renderCardChart(c);
+          if (c.type === "insight") this.renderInsightRadar(c);
+        }));
+        return;
+      }
+      this.dashLoading = true;
+      try {
+        const R = await this.api("GET", `/api/datasets/${this.currentId}/dashboard`);
+        this.dashConfigs = R.cards || [];
+        this.syncResultPins();
+        await this.rebuildDash();
+        this.dashLoaded = true;
+      } catch (e) { this.toast(e.message, "error"); }
+      finally { this.dashLoading = false; }
+    },
+
+    resetDash() {
+      (this.dashCards || []).forEach((c) => {
+        if (this._charts && this._charts[c.id]) { this._charts[c.id].dispose(); delete this._charts[c.id]; }
+      });
+      this.dashCards = [];
+      this.dashConfigs = [];
+      this.dashLoaded = false;
+    },
+
+    async rebuildDash() {
+      // 清掉旧图实例再按配置重放——数据更新后看板自然反映最新值
+      (this.dashCards || []).forEach((c) => {
+        if (this._charts && this._charts[c.id]) { this._charts[c.id].dispose(); delete this._charts[c.id]; }
+      });
+      this.dashCards = [];
+      const built = [];
+      for (const cfg of this.dashConfigs) {
+        try {
+          const payload = cfg.kind === "insight"
+            ? await this.api("GET", `/api/datasets/${this.currentId}/insights`)
+            : await this.api("POST", `/api/datasets/${this.currentId}/analyze`, { kind: cfg.kind, params: cfg.params });
+          built.push(this.makeDashCard(cfg, payload));
+        } catch (e) {
+          built.push({ id: "dash-err-" + built.length, type: "table", icon: "⚠️", title: cfg.title, time: "",
+            span2: !!cfg.span2, chartDiv: false, payload: { note: "重建失败：" + e.message } });
+        }
+      }
+      this.dashCards = built;
+      this.$nextTick(() => built.forEach((c) => {
+        if (c.chartDiv) this.renderCardChart(c);
+        if (c.type === "insight") this.renderInsightRadar(c);
+      }));
+    },
+
+    makeDashCard(cfg, payload) {
+      const card = {
+        id: "dash-" + CARD_SEQ++,
+        type: cfg.kind === "kpi" ? "kpi" : (cfg.kind === "insight" ? "insight" : "table"),
+        icon: cfg.icon, title: cfg.title,
+        time: new Date().toLocaleTimeString("zh-CN", { hour12: false }),
+        span2: !!cfg.span2, payload, chartType: "bar", showDetail: false,
+        _ana: { kind: cfg.kind, params: cfg.params }, pinned: true,
+      };
+      if (cfg.kind === "funnel") { card.chartDiv = true; card.chartType = "funnel"; }
+      else if (cfg.kind === "insight") card.chartDiv = false;
+      else {
+        const R = payload;
+        card.chartDiv = !!(R.matrix || R.box_stats || R.points || R.heatmap || R.row_labels || R.kind === "funnel"
+          || (R.rows && R.rows.length > 1 && R.columns && R.columns.some((c) => c.numeric)));
+        if (R.chart && R.chart.type && !R.matrix && !R.box_stats) card.chartType = R.chart.type;
+      }
+      return card;
+    },
+
+    async pinCard(card) {
+      if (!card._ana) return;
+      this.dashConfigs.push({ kind: card._ana.kind, params: card._ana.params, title: card.title, icon: card.icon, span2: !!card.span2 });
+      card.pinned = true;
+      await this.persistDash();
+      this.rebuildDash();
+      this.toast("已钉到看板");
+    },
+
+    async unpinCard(card) {
+      const key = JSON.stringify(card._ana ? card._ana.params || {} : {});
+      const idx = this.dashConfigs.findIndex((c) => c.kind === card._ana.kind && JSON.stringify(c.params || {}) === key);
+      if (idx >= 0) this.dashConfigs.splice(idx, 1);
+      this.syncResultPins();
+      await this.persistDash();
+      this.rebuildDash();
+    },
+
+    async persistDash() {
+      try { await this.api("PUT", `/api/datasets/${this.currentId}/dashboard`, { cards: this.dashConfigs }); }
+      catch (e) { this.toast(e.message, "error"); }
+    },
+
+    // 结果页卡片 📌 状态与配置表比对（kind+params 相同 = 同一张钉卡）
+    syncResultPins() {
+      const key = (a) => (a ? a.kind + "|" + JSON.stringify(a.params || {}) : "");
+      const keys = new Set(this.dashConfigs.map((c) => key({ kind: c.kind, params: c.params })));
+      (this.cards || []).forEach((c) => { c.pinned = !!(c._ana && keys.has(key(c._ana))); });
+    },
+
+    async refreshDash() {
+      this.dashLoading = true;
+      try { await this.rebuildDash(); } finally { this.dashLoading = false; }
+    },
+
+    toggleShowMode() {
+      this.showMode = !this.showMode;
+      document.body.classList.toggle("showmode", this.showMode);
+      // 侧栏隐藏后容器尺寸变化，等过渡结束再 resize 图表
+      this.$nextTick(() => setTimeout(() => {
+        Object.values(this._charts || {}).forEach((c) => c && c.resize());
+      }, 260));
+    },
+
+    fmtKpi(v) {
+      if (v === null || v === undefined) return "—";
+      if (typeof v !== "number") return String(v);
+      return v.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
+    },
+
+    kpiAggLabel(a) {
+      return { sum: "求和", mean: "平均", count: "行数" }[a] || a;
     },
 
     // ---------- 列头快捷动作 ----------
@@ -1313,7 +1499,8 @@ const app = createApp({
       this.busy = true;
       try {
         const R = await this.api("GET", `/api/datasets/${this.currentId}/insights`);
-        this.addCard({ type: "insight", icon: "🩺", title: "数据体检报告", payload: R, span2: true });
+        const card = this.addCard({ type: "insight", icon: "🩺", title: "数据体检报告", payload: R, span2: true });
+        card._ana = { kind: "insight", params: {} };  // 体检卡同样可钉到看板
         const n = (R.findings || []).length;
         this.toast(n ? `体检完成：发现 ${n} 个问题，详见结果页` : "体检完成：未发现问题");
       } catch (e) { this.toast(e.message, "error"); }

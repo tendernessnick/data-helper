@@ -1,6 +1,6 @@
-"""快速统计：描述统计 / 分组聚合 / 相关性 / 直方图 / 箱线图 / 频次 / 时间趋势 / 异常值。
+"""快速统计：描述统计 / 分组聚合 / 相关性 / 直方图 / 箱线图 / 频次 / 时间趋势 / 异常值 / KPI / 漏斗。
 
-统一返回 {"columns": [...], "rows": [[...]], "kind": ...} 结构，
+统一返回 {"columns": [...], "rows": [[...]], "kind": ...} 结构（kpi/funnel 为运营看板专用结构），
 前端据此渲染表格与图表。
 """
 import numpy as np
@@ -276,6 +276,95 @@ def trend(df: pd.DataFrame, params: dict) -> dict:
     }
 
 
+KPI_AGGS = ("sum", "mean", "count")
+
+
+def kpi(df: pd.DataFrame, params: dict) -> dict:
+    """KPI 指标卡：数值列聚合为大数字；有日期列时按「后半段 vs 前等长段」给环比。"""
+    agg = params.get("agg", "sum")
+    if agg not in KPI_AGGS:
+        raise AnalysisError(f"不支持的聚合方式: {agg}，可选: {', '.join(KPI_AGGS)}")
+    value_col = params.get("value_column", "")
+    if agg == "count":
+        value, label = int(len(df)), "行数"
+    else:
+        _check(df, value_col)
+        s = pd.to_numeric(df[value_col], errors="coerce")
+        value = float(s.mean()) if agg == "mean" else float(s.sum())
+        value = round(value, 4)
+        label = str(value_col)
+    result = {"kind": "kpi", "column": label, "agg": agg, "value": value}
+
+    date_col = (params.get("date_column") or "").strip()
+    if date_col and date_col in df.columns and agg != "count":
+        d = pd.to_datetime(df[date_col], errors="coerce")
+        valid = d.notna()
+        if int(valid.sum()) >= 2:
+            dmin, dmax = d[valid].min(), d[valid].max()
+            span = (dmax - dmin).days + 1
+            half = span // 2
+            if half >= 1 and span >= 2:
+                cur_start = dmax - pd.Timedelta(days=half - 1)
+                prev_start = cur_start - pd.Timedelta(days=half)
+                cur_mask = valid & (d >= cur_start)
+                prev_mask = valid & (d >= prev_start) & (d < cur_start)
+                s_all = pd.to_numeric(df[value_col], errors="coerce")
+                cur_v = float(s_all[cur_mask].sum() if agg == "sum" else s_all[cur_mask].mean())
+                prev_v = float(s_all[prev_mask].sum() if agg == "sum" else s_all[prev_mask].mean())
+                # 口径说明写清期初日；大数字即当期值（运营语境：最新周期 + 环比）
+                note = f"近{half}天（{cur_start:%m-%d} 起）vs 前{half}天"
+                delta = round((cur_v - prev_v) / abs(prev_v) * 100, 1) if prev_v not in (0, 0.0) else None
+                result.update({
+                    "value": round(cur_v, 4),
+                    "prev": round(prev_v, 4),
+                    "delta_pct": delta,
+                    "span_note": note,
+                })
+    return result
+
+
+def funnel(df: pd.DataFrame, params: dict) -> dict:
+    """轻量漏斗：events 模式按步骤列取值计数（可按用户列去重），columns 模式每列非空即达成。"""
+    mode = params.get("mode", "events")
+    if mode == "columns":
+        cols = [c for c in (params.get("columns") or []) if c]
+        if len(cols) < 2:
+            raise AnalysisError("columns 模式需按顺序提供至少 2 个步骤列")
+        names = []
+        counts = []
+        for c in cols:
+            _check(df, c)
+            names.append(str(c))
+            counts.append(int(df[c].notna().sum()))
+        note = "每列非空视为达成该步骤"
+    else:
+        col = params.get("column")
+        steps = [s for s in (params.get("steps") or []) if s]
+        if len(steps) < 2:
+            raise AnalysisError("请按顺序提供至少 2 个步骤")
+        _check(df, col)
+        base = df[df[col].isin(steps)]
+        user_col = (params.get("user_column") or "").strip()
+        if user_col:
+            _check(df, user_col)
+            grp = base.groupby(col)[user_col].nunique()
+            counts = [int(grp.get(s, 0)) for s in steps]
+            note = f"按 {user_col} 去重人数"
+        else:
+            vc = base[col].value_counts()
+            counts = [int(vc.get(s, 0)) for s in steps]
+            note = "按行数统计（提供用户列可去重）"
+        names = [str(s) for s in steps]
+
+    steps_out = []
+    prev = None
+    for name, c in zip(names, counts):
+        conv = None if prev is None or prev == 0 else round(c / prev * 100, 1)
+        steps_out.append({"name": name, "count": c, "conv_from_prev": conv})
+        prev = c
+    return {"kind": "funnel", "steps": steps_out, "total": int(counts[0]) if counts else 0, "note": note}
+
+
 KINDS = {
     "describe": describe,
     "groupby": groupby,
@@ -285,6 +374,8 @@ KINDS = {
     "value_counts": value_counts,
     "trend": trend,
     "outliers": outliers,
+    "kpi": kpi,
+    "funnel": funnel,
 }
 
 

@@ -376,6 +376,40 @@ def analyze(ds_id: str, body: AnalyzeBody):
         raise HTTPException(400, str(e))
 
 
+# ---------- 运营看板（钉卡配置持久化） ----------
+
+
+class DashboardBody(BaseModel):
+    cards: list = []
+
+
+@router.get("/datasets/{ds_id}/dashboard")
+def get_dashboard(ds_id: str):
+    try:
+        return {"cards": storage.get_dashboard(ds_id)}
+    except storage.DatasetNotFound:
+        raise HTTPException(404, f"数据集不存在: {ds_id}")
+
+
+@router.put("/datasets/{ds_id}/dashboard")
+def put_dashboard(ds_id: str, body: DashboardBody):
+    try:
+        return {"cards": storage.save_dashboard(ds_id, body.cards)}
+    except storage.DatasetNotFound:
+        raise HTTPException(404, f"数据集不存在: {ds_id}")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.delete("/datasets/{ds_id}/dashboard")
+def delete_dashboard(ds_id: str):
+    try:
+        storage.clear_dashboard(ds_id)
+        return {"ok": True}
+    except storage.DatasetNotFound:
+        raise HTTPException(404, f"数据集不存在: {ds_id}")
+
+
 # ---------- 一键体检 ----------
 
 

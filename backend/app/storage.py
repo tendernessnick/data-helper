@@ -28,6 +28,8 @@ logger = logging.getLogger(__name__)
 DATASETS_DIR = DATA_DIR / "datasets"
 DATASETS_DIR.mkdir(parents=True, exist_ok=True)
 PROJECTS_FILE = DATA_DIR / "projects.json"
+# 运营看板：{ds_id: [{kind, params, title, icon, span2}...]}，卡片配置固化、刷新后重放重建
+DASHBOARDS_FILE = DATA_DIR / "dashboards.json"
 
 MAX_HISTORY = 200
 # 版本快照保留上限（超出淘汰最旧；对应历史条目将无法回跳）
@@ -529,6 +531,10 @@ def rename_dataset(ds_id: str, name: str) -> dict:
 def delete_dataset(ds_id: str) -> None:
     with _lock:
         shutil.rmtree(_ds_dir(ds_id))
+        data = _read_dashboards()
+        if ds_id in data:  # 看板钉卡配置随之清理
+            data.pop(ds_id, None)
+            _write_dashboards(data)
     logger.info("数据集已删除 id=%s", ds_id)
 
 
@@ -677,3 +683,68 @@ def move_dataset(ds_id: str, project_id: str) -> dict:
         meta["project"] = project_id
         _write_meta(d, meta)
         return meta
+
+
+# ---------- 运营看板（钉卡配置持久化） ----------
+
+
+def _read_dashboards() -> dict:
+    if not DASHBOARDS_FILE.exists():
+        return {}
+    try:
+        data = json.loads(DASHBOARDS_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _write_dashboards(data: dict) -> None:
+    tmp = DASHBOARDS_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    os.replace(tmp, DASHBOARDS_FILE)
+
+
+def get_dashboard(ds_id: str) -> list:
+    """某数据集的看板钉卡配置列表（未创建过返回空列表）。"""
+    _ds_dir(ds_id)  # 校验数据集存在
+    with _lock:
+        cards = _read_dashboards().get(ds_id) or []
+    return [dict(c) for c in cards]
+
+
+def save_dashboard(ds_id: str, cards: list) -> list:
+    """整体覆盖保存看板配置（上限 12 张，与结果页卡片上限一致）。"""
+    if not isinstance(cards, list):
+        raise ValueError("cards 必须是列表")
+    if len(cards) > 12:
+        raise ValueError("看板最多钉 12 张卡片")
+    clean = []
+    for c in cards:
+        if not isinstance(c, dict) or not c.get("kind"):
+            continue
+        clean.append({
+            "kind": str(c["kind"]),
+            "params": c.get("params") or {},
+            "title": str(c.get("title") or c["kind"]),
+            "icon": str(c.get("icon") or "📈"),
+            "span2": bool(c.get("span2")),
+        })
+    _ds_dir(ds_id)
+    with _lock:
+        data = _read_dashboards()
+        if clean:
+            data[ds_id] = clean
+        else:
+            data.pop(ds_id, None)
+        _write_dashboards(data)
+    logger.info("看板已保存 ds_id=%s cards=%d", ds_id, len(clean))
+    return clean
+
+
+def clear_dashboard(ds_id: str) -> None:
+    _ds_dir(ds_id)
+    with _lock:
+        data = _read_dashboards()
+        if ds_id in data:
+            data.pop(ds_id, None)
+            _write_dashboards(data)

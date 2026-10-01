@@ -2,7 +2,7 @@
 
 **本地运行的数据预处理助手**：导入 → 🩺 数据体检（发现明显问题）→ 🔧 一键修复 / 清洗 → 简单可视化 → 导出，把干净数据交给你的主力分析软件。各行各业通用，检查规则只看"数据长什么样"，不预设业务含义。**数据只在运行环境内处理**（桌面版不出本机，云部署版不出容器）——AI 只看到列结构摘要。
 
-![CI](https://github.com/tendernessnick/data-helper/actions/workflows/ci.yml/badge.svg) ![tests](https://img.shields.io/badge/tests-198%20passed-brightgreen) ![技术栈](https://img.shields.io/badge/Python-3.12%2B-blue) ![后端](https://img.shields.io/badge/FastAPI%20%2B%20DuckDB%20%2B%20pandas-green) ![前端](https://img.shields.io/badge/Vue3%20%2B%20ECharts-无构建-orange) ![存储](https://img.shields.io/badge/存储-Parquet%20列存-blueviolet) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
+![CI](https://github.com/tendernessnick/data-helper/actions/workflows/ci.yml/badge.svg) ![tests](https://img.shields.io/badge/tests-210%20passed-brightgreen) ![技术栈](https://img.shields.io/badge/Python-3.12%2B-blue) ![后端](https://img.shields.io/badge/FastAPI%20%2B%20DuckDB%20%2B%20pandas-green) ![前端](https://img.shields.io/badge/Vue3%20%2B%20ECharts-无构建-orange) ![存储](https://img.shields.io/badge/存储-Parquet%20列存-blueviolet) ![license](https://img.shields.io/badge/license-MIT-lightgrey)
 
 ---
 
@@ -41,7 +41,7 @@
 python -m venv .venv
 .venv\Scripts\pip install -r requirements-dev.txt
 .venv\Scripts\python run_app.py            # 或 uvicorn backend.app.main:app --port 8765 --reload
-.venv\Scripts\python -m pytest tests/ -q   # 198 项测试
+.venv\Scripts\python -m pytest tests/ -q   # 210 项测试
 ```
 
 ## ✨ 功能一览
@@ -56,6 +56,7 @@ python -m venv .venv
 | ⏪ 多步回溯 | 每次清洗/变换前自动保存版本快照（硬链接零拷贝，最多 20 份）；历史面板任意一步「回到这步」；**回错可再跳回**（分支保留，做新操作才丢弃未走分支）；回滚原始 = 秒回 v0 |
 | 🐍 Python 变换 | 直接写 pandas 代码，**先预览后应用**（快照重放防错版），30 秒超时保护 |
 | 📊 快速统计与图表 | 分组聚合、相关性（Pearson/Spearman/Kendall 卡片内切换）、直方图、箱线图、频次、describe、时间趋势、异常值检测；**深度画像**：缺失矩阵热力图、重复行明细、两列散点、文本长度统计 |
+| 📌 运营看板（nio 分支） | 主区第三个 tab：结果卡「📌 钉看板」固化展示，配置持久化、刷新自动重建；**KPI 指标卡**（大数字 + 环比涨跌 + 口径说明）、**转化漏斗**（事件日志/多列标记两形态，逐步转化率）、**放映模式**（隐藏侧栏全屏，Esc 退出） |
 | 🗄️ SQL 控制台 | DuckDB 引擎，数据集注册 `ds1/ds2…`+`df`；**直接注册 Parquet 视图惰性读取**；只读防护；结果可存为新数据集（不截断） |
 | 🤖 AI Agent（可选，后端保留） | 后端 function calling 工具循环完整保留（体检/汇总/分组/趋势/相关/直方图/频次），**应用内对话界面已在 v4.1 移除**，推荐经 🔌 MCP 外接客户端使用；后续想恢复只需加回 UI |
 | 🔌 MCP 服务端（可选） | **外接现成聊天界面**：Cherry Studio / ChatWise 等客户端填你自己的 API Key，把本软件添加为 MCP 工具源，10 个只读工具（数据集浏览/体检/SQL/统计摘要）——LLM 在客户端、数据在本机（[docs/MCP.md](docs/MCP.md)） |
@@ -117,7 +118,7 @@ data_helper/
 ├── docs/使用手册.md       # 面向普通用户的使用手册
 ├── docs/DEPLOY_CLOUDBASE.md # CloudBase 云托管部署指南（webview 分支，Docker）
 ├── Dockerfile            # 云托管容器镜像（监听平台注入的 PORT）
-├── tests/                # 198 项 pytest
+├── tests/                # 210 项 pytest
 └── .github/workflows/ci.yml  # ruff + pytest（Python 3.12/3.14）
 ```
 
@@ -131,7 +132,7 @@ data_helper/
 
 ## 🧪 测试与质量
 
-**198 项 pytest 全绿**：上传解析（含 GBK/JSON/XLSX/流式大文件/类型漂移回退）、Parquet 存储与迁移、SQL（含建集不截断回归）、**体检规则逐条命中/干净数据放行/一键修复可执行契约**、**8 个新清洗操作正反例**、AI Agent（mock LLM：工具循环/错误回填/降级回退/会话历史/SSE 协议）、MCP 协议等。`ruff` 零告警；CI 在 Python 3.12 / 3.14 双版本跑 lint + tests。
+**210 项 pytest 全绿**：上传解析（含 GBK/JSON/XLSX/流式大文件/类型漂移回退）、Parquet 存储与迁移、SQL（含建集不截断回归）、**体检规则逐条命中/干净数据放行/一键修复可执行契约**、**8 个新清洗操作正反例**、**运营看板（KPI 环比/漏斗/钉卡持久化）**、AI Agent（mock LLM：工具循环/错误回填/降级回退/会话历史/SSE 协议）、MCP 协议等。`ruff` 零告警；CI 在 Python 3.12 / 3.14 双版本跑 lint + tests。
 
 ## ⚠️ 说明与边界
 
